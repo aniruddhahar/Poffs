@@ -155,7 +155,7 @@ class App:
         self.root.resizable(False, False)
 
         self.output_path = tk.StringVar(value=str(Path("volumetric_texture.png").resolve()))
-        self.size_var = tk.IntVar(value=64)
+        self.size_var = tk.StringVar(value="64")
         self.seamless_var = tk.BooleanVar(value=True)
         self.noise_type_var = tk.StringVar(value="Value Noise")
         self.octaves_var = tk.IntVar(value=4)
@@ -174,10 +174,7 @@ class App:
         ttk.Label(main, text="Size (LxLxL):").grid(row=0, column=0, sticky=tk.W, pady=4)
         size_frame = ttk.Frame(main)
         size_frame.grid(row=0, column=1, sticky=tk.EW, pady=4)
-        ttk.Entry(size_frame, textvariable=self.size_var, width=6).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Scale(size_frame, from_=4, to=128, orient=tk.HORIZONTAL,
-                  variable=self.size_var, command=self._on_size_change).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Label(size_frame, text="4-128").pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Combobox(size_frame, textvariable=self.size_var, values=["16", "64", "256", "1024"], state="readonly", width=6).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         # --- Row 2: Seed ---
         ttk.Label(main, text="Seed:").grid(row=1, column=0, sticky=tk.W, pady=4)
@@ -235,9 +232,6 @@ class App:
         # --- Grid config ---
         main.columnconfigure(1, weight=1)
 
-    def _on_size_change(self, val):
-        self.size_var.set(int(float(val)))
-
     def _validate_freq(self):
         try:
             v = float(self.base_freq_var.get())
@@ -266,7 +260,7 @@ class App:
         self.generating = True
         self._update_status("Generating...", 0)
 
-        size = override_size if override_size is not None else self.size_var.get()
+        size = override_size if override_size is not None else int(self.size_var.get())
         seamless = self.seamless_var.get()
         octaves = self.octaves_var.get()
         seed = self.seed_var.get()
