@@ -184,9 +184,9 @@ class App:
         ttk.Label(main, text="Base Freq:").grid(row=2, column=0, sticky=tk.W, pady=4)
         freq_frame = ttk.Frame(main)
         freq_frame.grid(row=2, column=1, sticky=tk.EW, pady=4)
-        ttk.Scale(freq_frame, from_=0.01, to=1.0, orient=tk.HORIZONTAL,
+        ttk.Scale(freq_frame, from_=0.01, to=10.0, orient=tk.HORIZONTAL,
                   variable=self.base_freq_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        freq_entry = ttk.Entry(freq_frame, textvariable=self.base_freq_var, width=6)
+        freq_entry = ttk.Entry(freq_frame, textvariable=self.base_freq_var, width=7)
         freq_entry.pack(side=tk.LEFT, padx=(6, 0))
         freq_entry.bind("<Return>", lambda e: self._validate_freq())
 
