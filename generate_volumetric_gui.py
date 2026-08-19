@@ -126,7 +126,7 @@ def generate_volume(size: int, seamless: bool, octaves: int = 4,
                 frequency = base_freq
                 max_val = 0.0
                 for octave_idx in range(octaves):
-                    octave_freq = base_freq * (2.0 ** octave_idx)
+                    octave_freq = (base_freq / 100.0) * (2.0 ** octave_idx)
                     hash_period = max(2, round(size * octave_freq)) if seamless else size
                     coord_x = (x / size) * hash_period
                     coord_y = (y / size) * hash_period
