@@ -116,7 +116,7 @@ def sample_3d(x: float, y: float, z: float, size: int, seamless: bool,
     return _lerp(v0, v1, fz)
 
 def generate_volume(size: int, seamless: bool, octaves: int = 4,
-                    base_freq: float = 1.0) -> list[list[list[float]]]:
+                    base_freq: float = 1.0, noise_type: str = "Value Noise") -> list[list[list[float]]]:
     volume = [[[0.0] * size for _ in range(size)] for _ in range(size)]
     for z in range(size):
         for y in range(size):
@@ -157,6 +157,7 @@ class App:
         self.output_path = tk.StringVar(value=str(Path("volumetric_texture.png").resolve()))
         self.size_var = tk.IntVar(value=64)
         self.seamless_var = tk.BooleanVar(value=True)
+        self.noise_type_var = tk.StringVar(value="Value Noise")
         self.octaves_var = tk.IntVar(value=4)
         self.seed_var = tk.IntVar(value=42)
         self.base_freq_var = tk.DoubleVar(value=1.0)
@@ -204,24 +205,30 @@ class App:
         ttk.Checkbutton(main, text="Seamless Tiling", variable=self.seamless_var).grid(
             row=4, column=1, sticky=tk.W, pady=4, padx=(8, 0))
 
-        # --- Row 6: Output Path ---
-        ttk.Label(main, text="Output:").grid(row=5, column=0, sticky=tk.W, pady=4)
+        # --- Row 6: Noise Type ---
+        ttk.Label(main, text="Noise Type:").grid(row=5, column=0, sticky=tk.W, pady=4)
+        noise_frame = ttk.Frame(main)
+        noise_frame.grid(row=5, column=1, sticky=tk.EW, pady=4, padx=(8, 0))
+        ttk.Combobox(noise_frame, textvariable=self.noise_type_var, values=["Value Noise"], state="readonly", width=20).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # --- Row 7: Output Path ---
+        ttk.Label(main, text="Output:").grid(row=7, column=0, sticky=tk.W, pady=4)
         out_frame = ttk.Frame(main)
-        out_frame.grid(row=5, column=1, sticky=tk.EW, pady=4, padx=(8, 0))
+        out_frame.grid(row=7, column=1, sticky=tk.EW, pady=4, padx=(8, 0))
         ttk.Entry(out_frame, textvariable=self.output_path, width=30).pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(out_frame, text="Browse...", command=self._browse_output).pack(side=tk.LEFT, padx=(6, 0))
 
-        # --- Row 7: Progress ---
+        # --- Row 8: Progress ---
         progress_frame = ttk.Frame(main)
-        progress_frame.grid(row=6, column=0, columnspan=2, sticky=tk.EW, pady=8)
+        progress_frame.grid(row=8, column=0, columnspan=2, sticky=tk.EW, pady=8)
         self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress, maximum=100)
         self.progress_bar.pack(fill=tk.X)
         self.status_label = ttk.Label(progress_frame, text="Ready")
         self.status_label.pack(fill=tk.X, pady=(2, 0))
 
-        # --- Row 8: Buttons ---
+        # --- Row 9: Buttons ---
         btn_frame = ttk.Frame(main)
-        btn_frame.grid(row=7, column=0, columnspan=2, pady=10)
+        btn_frame.grid(row=9, column=0, columnspan=2, pady=10)
         ttk.Button(btn_frame, text="Generate Preview (64³)", command=lambda: self._start_generation(64)).pack(side=tk.LEFT, expand=True, padx=(0, 4))
         ttk.Button(btn_frame, text="Generate Full", command=self._start_generation).pack(side=tk.LEFT, expand=True, padx=(4, 0))
 
@@ -272,7 +279,7 @@ class App:
         def worker():
             try:
                 self._update_status("Computing volume...", 10)
-                volume = generate_volume(size, seamless, octaves=octaves, base_freq=base_freq)
+                volume = generate_volume(size, seamless, octaves=octaves, base_freq=base_freq, noise_type=self.noise_type_var.get())
 
                 self._update_status("Building grid...", 70)
                 cols = math.ceil(math.sqrt(size))
