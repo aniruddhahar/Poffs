@@ -115,32 +115,224 @@ def sample_3d(x: float, y: float, z: float, size: int, seamless: bool,
 
     return _lerp(v0, v1, fz)
 
+def _precompute_value_table(period: int) -> list[list[list[float]]]:
+    """Pre-compute hash values for a given period."""
+    table = [[[0.0] * period for _ in range(period)] for _ in range(period)]
+    for z in range(period):
+        for y in range(period):
+            for x in range(period):
+                table[z][y][x] = _hash_coord(x, y, z, period, True)
+    return table
+
+
+def _sample_value_table(cx: float, cy: float, cz: float, table: list[list[list[float]]],
+                        period: int, seamless: bool) -> float:
+    """Sample pre-computed table with trilinear interpolation."""
+    ix, iy, iz = int(cx), int(cy), int(cz)
+    fx = _smoothstep(cx - ix)
+    fy = _smoothstep(cy - iy)
+    fz = _smoothstep(cz - iz)
+
+    if seamless:
+        i0x, i1x = ix % period, (ix + 1) % period
+        i0y, i1y = iy % period, (iy + 1) % period
+        i0z, i1z = iz % period, (iz + 1) % period
+    else:
+        i0x, i1x = max(0, ix), min(period - 1, ix + 1)
+        i0y, i1y = max(0, iy), min(period - 1, iy + 1)
+        i0z, i1z = max(0, iz), min(period - 1, iz + 1)
+
+    h000 = table[i0z][i0y][i0x]
+    h100 = table[i0z][i0y][i1x]
+    h010 = table[i0z][i1y][i0x]
+    h110 = table[i0z][i1y][i1x]
+    h001 = table[i1z][i0y][i0x]
+    h101 = table[i1z][i0y][i1x]
+    h011 = table[i1z][i1y][i0x]
+    h111 = table[i1z][i1y][i1x]
+
+    v00 = _lerp(h000, h100, fx)
+    v10 = _lerp(h010, h110, fx)
+    v01 = _lerp(h001, h101, fx)
+    v11 = _lerp(h011, h111, fx)
+    v0 = _lerp(v00, v10, fy)
+    v1 = _lerp(v01, v11, fy)
+    return _lerp(v0, v1, fz)
+
+
+def _precompute_perlin_table(period: int) -> list[list[tuple[float, float, float]]]:
+    """Pre-compute gradient vectors for Perlin noise."""
+    table = [[[None] * period for _ in range(period)] for _ in range(period)]
+    for z in range(period):
+        for y in range(period):
+            for x in range(period):
+                h1 = _hash_seed ^ (x * 374761393) ^ (y * 668265263) ^ (z * 1274126177)
+                h1 = (h1 ^ (h1 >> 13)) * 1103515245
+                h1 = h1 ^ (h1 >> 16)
+                gx = ((h1 & 0x7FFFFFFF) / 0x7FFFFFFF) * 2.0 - 1.0
+
+                h2 = (h1 ^ (h1 >> 8)) * 1103515245
+                h2 = h2 ^ (h2 >> 16)
+                gy = ((h2 & 0x7FFFFFFF) / 0x7FFFFFFF) * 2.0 - 1.0
+
+                h3 = ((h2 >> 4) ^ (h2 >> 12)) * 1103515245
+                h3 = h3 ^ (h3 >> 16)
+                gz = ((h3 & 0x7FFFFFFF) / 0x7FFFFFFF) * 2.0 - 1.0
+
+                table[z][y][x] = (gx, gy, gz)
+    return table
+
+
+def _sample_perlin_table(cx: float, cy: float, cz: float, table: list[list[tuple[float, float, float]]],
+                         period: int, seamless: bool) -> float:
+    """Sample pre-computed Perlin table with trilinear interpolation."""
+    ix, iy, iz = int(cx), int(cy), int(cz)
+    dx = cx - ix
+    dy = cy - iy
+    dz = cz - iz
+    dx = _smoothstep(dx)
+    dy = _smoothstep(dy)
+    dz = _smoothstep(dz)
+
+    if seamless:
+        i0x, i1x = ix % period, (ix + 1) % period
+        i0y, i1y = iy % period, (iy + 1) % period
+        i0z, i1z = iz % period, (iz + 1) % period
+    else:
+        i0x, i1x = max(0, ix), min(period - 1, ix + 1)
+        i0y, i1y = max(0, iy), min(period - 1, iy + 1)
+        i0z, i1z = max(0, iz), min(period - 1, iz + 1)
+
+    g000 = table[i0z][i0y][i0x]
+    g100 = table[i0z][i0y][i1x]
+    g010 = table[i0z][i1y][i0x]
+    g110 = table[i0z][i1y][i1x]
+    g001 = table[i1z][i0y][i0x]
+    g101 = table[i1z][i0y][i1x]
+    g011 = table[i1z][i1y][i0x]
+    g111 = table[i1z][i1y][i1x]
+
+    def dot(g, dx_val, dy_val, dz_val):
+        return g[0] * dx_val + g[1] * dy_val + g[2] * dz_val
+
+    nx00 = _lerp(dot(g000, dx, dy, dz), dot(g100, dx - 1, dy, dz), dx)
+    nx01 = _lerp(dot(g010, dx, dy - 1, dz), dot(g110, dx - 1, dy - 1, dz), dx)
+    nx10 = _lerp(dot(g001, dx, dy, dz - 1), dot(g101, dx - 1, dy, dz - 1), dx)
+    nx11 = _lerp(dot(g011, dx, dy - 1, dz - 1), dot(g111, dx - 1, dy - 1, dz - 1), dx)
+    nx0 = _lerp(nx00, nx01, dy)
+    nx1 = _lerp(nx10, nx11, dy)
+    return _lerp(nx0, nx1, dz)
+
+
+def _precompute_worley_table(period: int) -> list[list[tuple[float, float, float]]]:
+    """Pre-compute feature points for Worley noise."""
+    table = [[[None] * period for _ in range(period)] for _ in range(period)]
+    for z in range(period):
+        for y in range(period):
+            for x in range(period):
+                table[z][y][x] = _worley_hash_coord(x, y, z, period)
+    return table
+
+
+def _sample_worley_table(cx: float, cy: float, cz: float, table: list[list[tuple[float, float, float]]],
+                         period: int, seamless: bool) -> float:
+    """Sample pre-computed Worley table - find distance to nearest feature point."""
+    ix, iy, iz = int(cx), int(cy), int(cz)
+    min_dist = float("inf")
+
+    for dz in range(-1, 2):
+        for dy in range(-1, 2):
+            for dx in range(-1, 2):
+                if seamless:
+                    cx_i = (ix + dx) % period
+                    cy_i = (iy + dy) % period
+                    cz_i = (iz + dz) % period
+                    fx = cx - ix - table[cz_i][cy_i][cx_i][0]
+                    fy = cy - iy - table[cz_i][cy_i][cx_i][1]
+                    fz = cz - iz - table[cz_i][cy_i][cx_i][2]
+
+                    if fx > 0.5:
+                        fx -= 1.0
+                    elif fx < -0.5:
+                        fx += 1.0
+                    if fy > 0.5:
+                        fy -= 1.0
+                    elif fy < -0.5:
+                        fy += 1.0
+                    if fz > 0.5:
+                        fz -= 1.0
+                    elif fz < -0.5:
+                        fz += 1.0
+                else:
+                    cx_i = max(0, min(period - 1, ix + dx))
+                    cy_i = max(0, min(period - 1, iy + dy))
+                    cz_i = max(0, min(period - 1, iz + dz))
+                    fx = max(0, min(1, cx - ix - table[cz_i][cy_i][cx_i][0]))
+                    fy = max(0, min(1, cy - iy - table[cz_i][cy_i][cx_i][1]))
+                    fz = max(0, min(1, cz - iz - table[cz_i][cy_i][cx_i][2]))
+
+                dist_sq = fx * fx + fy * fy + fz * fz
+                if dist_sq < min_dist:
+                    min_dist = dist_sq
+
+    return max(0.0, min(1.0, math.sqrt(min_dist) * 2.0))
+
+
 def generate_volume(size: int, seamless: bool, octaves: int = 4,
-                    base_freq: float = 1.0, noise_type: str = "Value Noise") -> list[list[list[float]]]:
+                    base_freq: float = 1.0, noise_type: str = "Value Noise",
+                    cancel_event: threading.Event = None) -> list[list[list[float]]]:
+    """Generate volume with pre-computed hash tables for speed."""
+    # Pre-compute tables for each octave
+    octave_tables = []
+    for octave_idx in range(octaves):
+        octave_freq = (base_freq / 100.0) * (2.0 ** octave_idx)
+        hash_period = max(2, round(size * octave_freq)) if seamless else size
+
+        if noise_type == "Worley Noise":
+            table = _precompute_worley_table(hash_period)
+        elif noise_type == "FBM Perlin Noise":
+            table = _precompute_perlin_table(hash_period)
+        else:
+            table = _precompute_value_table(hash_period)
+
+        octave_tables.append((hash_period, table))
+
+    # Generate volume using pre-computed tables
     volume = [[[0.0] * size for _ in range(size)] for _ in range(size)]
     for z in range(size):
         for y in range(size):
+            if cancel_event and cancel_event.is_set():
+                break
             for x in range(size):
                 val = 0.0
                 amplitude = 1.0
-                frequency = base_freq
                 max_val = 0.0
                 for octave_idx in range(octaves):
-                    octave_freq = (base_freq / 100.0) * (2.0 ** octave_idx)
-                    hash_period = max(2, round(size * octave_freq)) if seamless else size
+                    hash_period, table = octave_tables[octave_idx]
                     coord_x = (x / size) * hash_period
                     coord_y = (y / size) * hash_period
                     coord_z = (z / size) * hash_period
-                    val += amplitude * sample_noise(
-                        coord_x,
-                        coord_y,
-                        coord_z,
-                        size, seamless, octaves=1, hash_period=hash_period, noise_type=noise_type
-                    )
+
+                    if noise_type == "Worley Noise":
+                        val += amplitude * _sample_worley_table(
+                            coord_x, coord_y, coord_z, table, hash_period, seamless
+                        )
+                    elif noise_type == "FBM Perlin Noise":
+                        val += amplitude * _sample_perlin_table(
+                            coord_x, coord_y, coord_z, table, hash_period, seamless
+                        )
+                    else:
+                        val += amplitude * _sample_value_table(
+                            coord_x, coord_y, coord_z, table, hash_period, seamless
+                        )
+
                     max_val += amplitude
                     amplitude *= 0.5
-                    frequency *= 2.0
                 volume[z][y][x] = val / max_val
+
+        if cancel_event and cancel_event.is_set():
+            break
+
     return volume
 
 
@@ -347,6 +539,7 @@ class App:
         self.base_freq_var = tk.DoubleVar(value=1.0)
         self.progress = tk.DoubleVar(value=0.0)
         self.generating = False
+        self._cancel_event = threading.Event()
         self.preview_image = tk.PhotoImage(width=256, height=256)
 
         self._build_ui()
@@ -415,8 +608,12 @@ class App:
         # --- Row 9: Buttons ---
         btn_frame = ttk.Frame(ctrl_frame)
         btn_frame.grid(row=9, column=0, columnspan=2, pady=10)
-        ttk.Button(btn_frame, text="Preview", command=self._show_preview).pack(side=tk.LEFT, expand=True, padx=(0, 4))
-        ttk.Button(btn_frame, text="Render", command=self._render).pack(side=tk.LEFT, expand=True, padx=(4, 0))
+        self.btn_preview = ttk.Button(btn_frame, text="Preview", command=self._show_preview)
+        self.btn_preview.pack(side=tk.LEFT, expand=True, padx=(0, 4))
+        self.btn_render = ttk.Button(btn_frame, text="Render", command=self._render)
+        self.btn_render.pack(side=tk.LEFT, expand=True, padx=(4, 0))
+        self.btn_cancel = ttk.Button(btn_frame, text="Cancel", command=self._cancel_generation, state=tk.DISABLED)
+        self.btn_cancel.pack(side=tk.LEFT, expand=True, padx=(4, 0))
 
         ctrl_frame.columnconfigure(1, weight=1)
 
@@ -448,6 +645,9 @@ class App:
             self.progress.set(progress)
             self.root.update_idletasks()
 
+    def _cancel_generation(self):
+        self._cancel_event.set()
+
     def _grid_to_photo(self, grid: list[list[int]]) -> None:
         """Convert a 2D grayscale grid to PhotoImage pixels."""
         data = []
@@ -459,8 +659,10 @@ class App:
     def _show_preview(self):
         if self.generating:
             return
+        self._cancel_event.clear()
         self.generating = True
         self._update_status("Generating preview...", 0)
+        self._toggle_buttons()
 
         preview_size = 256
         seamless = self.seamless_var.get()
@@ -476,8 +678,13 @@ class App:
                 self._update_status("Computing volume...", 10)
                 volume = generate_volume(
                     preview_size, seamless, octaves=octaves,
-                    base_freq=base_freq, noise_type=self.noise_type_var.get()
+                    base_freq=base_freq, noise_type=self.noise_type_var.get(),
+                    cancel_event=self._cancel_event
                 )
+
+                if self._cancel_event.is_set():
+                    self.root.after(0, self._generation_cancelled)
+                    return
 
                 self._update_status("Building grid...", 70)
                 cols = math.ceil(math.sqrt(preview_size))
@@ -506,13 +713,16 @@ class App:
     def _preview_ready(self, grid: list[list[int]]):
         self.generating = False
         self._grid_to_photo(grid)
+        self._toggle_buttons()
         self._update_status("Preview ready", 100)
 
     def _render(self):
         if self.generating:
             return
+        self._cancel_event.clear()
         self.generating = True
         self._update_status("Rendering...", 0)
+        self._toggle_buttons()
 
         size = int(self.size_var.get())
         seamless = self.seamless_var.get()
@@ -529,8 +739,13 @@ class App:
                 self._update_status("Computing volume...", 10)
                 volume = generate_volume(
                     size, seamless, octaves=octaves,
-                    base_freq=base_freq, noise_type=self.noise_type_var.get()
+                    base_freq=base_freq, noise_type=self.noise_type_var.get(),
+                    cancel_event=self._cancel_event
                 )
+
+                if self._cancel_event.is_set():
+                    self.root.after(0, self._generation_cancelled)
+                    return
 
                 self._update_status("Building grid...", 70)
                 cols = math.ceil(math.sqrt(size))
@@ -559,6 +774,19 @@ class App:
                 self.root.after(0, self._generation_failed, str(e))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _toggle_buttons(self):
+        state = tk.DISABLED if self.generating else tk.NORMAL
+        self.btn_preview.config(state=state)
+        self.btn_render.config(state=state)
+        self.btn_cancel.config(state=tk.NORMAL if self.generating else tk.DISABLED)
+
+    def _generation_cancelled(self):
+        self.generating = False
+        self._cancel_event.clear()
+        self._toggle_buttons()
+        self._update_status("Cancelled", 0)
+        self._cancel_event.clear()
 
     def _generation_complete(self, output: str, size: int, cols: int, rows: int):
         self.generating = False
