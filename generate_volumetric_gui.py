@@ -235,15 +235,20 @@ def _perlin_hash(x: int, y: int, z: int) -> float:
 
 def _perlin_gradient(x: int, y: int, z: int, dx: float, dy: float, dz: float) -> float:
     """Compute gradient dot product for Perlin noise."""
-    h = _perlin_hash(x, y, z)
-    # Generate a random gradient direction from hash
-    gx = h * 2.0 - 1.0
-    h = (h ^ (h >> 8)) * 1103515245
-    h = h ^ (h >> 16)
-    gy = ((h & 0x7FFFFFFF) / 0x7FFFFFFF) * 2.0 - 1.0
-    h = ((h >> 4) ^ (h >> 12)) * 1103515245
-    h = h ^ (h >> 16)
-    gz = ((h & 0x7FFFFFFF) / 0x7FFFFFFF) * 2.0 - 1.0
+    # Generate gradient components from separate hash streams
+    h1 = _hash_seed ^ (x * 374761393) ^ (y * 668265263) ^ (z * 1274126177)
+    h1 = (h1 ^ (h1 >> 13)) * 1103515245
+    h1 = h1 ^ (h1 >> 16)
+    gx = ((h1 & 0x7FFFFFFF) / 0x7FFFFFFF) * 2.0 - 1.0
+
+    h2 = (h1 ^ (h1 >> 8)) * 1103515245
+    h2 = h2 ^ (h2 >> 16)
+    gy = ((h2 & 0x7FFFFFFF) / 0x7FFFFFFF) * 2.0 - 1.0
+
+    h3 = ((h2 >> 4) ^ (h2 >> 12)) * 1103515245
+    h3 = h3 ^ (h3 >> 16)
+    gz = ((h3 & 0x7FFFFFFF) / 0x7FFFFFFF) * 2.0 - 1.0
+
     return gx * dx + gy * dy + gz * dz
 
 
