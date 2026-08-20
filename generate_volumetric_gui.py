@@ -704,7 +704,17 @@ class App:
                     pct = 70 + (s / volume_size) * 25
                     self.root.after(0, self._update_status, f"Building grid... ({s+1}/{volume_size})", pct)
 
-                self.root.after(0, self._preview_ready, grid)
+                # Upscale 64x64 to 256x256
+                scale = 4
+                upscaled = [[0] * (total_w * scale) for _ in range(total_h * scale)]
+                for y in range(total_h):
+                    for x in range(total_w):
+                        val = grid[y][x]
+                        for dy in range(scale):
+                            for dx in range(scale):
+                                upscaled[y * scale + dy][x * scale + dx] = val
+
+                self.root.after(0, self._preview_ready, upscaled)
             except Exception as e:
                 self.root.after(0, self._generation_failed, str(e))
 
