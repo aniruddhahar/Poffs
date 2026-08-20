@@ -131,17 +131,196 @@ def generate_volume(size: int, seamless: bool, octaves: int = 4,
                     coord_x = (x / size) * hash_period
                     coord_y = (y / size) * hash_period
                     coord_z = (z / size) * hash_period
-                    val += amplitude * sample_3d(
+                    val += amplitude * sample_noise(
                         coord_x,
                         coord_y,
                         coord_z,
-                        size, seamless, octaves=1, hash_period=hash_period
+                        size, seamless, octaves=1, hash_period=hash_period, noise_type=noise_type
                     )
                     max_val += amplitude
                     amplitude *= 0.5
                     frequency *= 2.0
                 volume[z][y][x] = val / max_val
     return volume
+
+
+# ---------------------------------------------------------------------------
+# Worley Noise
+# ---------------------------------------------------------------------------
+
+def _worley_hash_coord(x: int, y: int, z: int, period: int) -> tuple[float, float, float]:
+    """Generate a deterministic pseudo-random point for Worley noise."""
+    hx = x % period if period > 0 else x
+    hy = y % period if period > 0 else y
+    hz = z % period if period > 0 else z
+    h = _hash_seed ^ (hx * 374761393) ^ (hy * 668265263) ^ (hz * 1274126177)
+    h = (h ^ (h >> 13)) * 1103515245
+    h = h ^ (h >> 16)
+    rx = (h & 0x7FFFFFFF) / 0x7FFFFFFF
+    h = (h ^ (h >> 13)) * 1103515245
+    h = h ^ (h >> 16)
+    ry = (h & 0x7FFFFFFF) / 0x7FFFFFFF
+    h = (h ^ (h >> 13)) * 1103515245
+    h = h ^ (h >> 16)
+    rz = (h & 0x7FFFFFFF) / 0x7FFFFFFF
+    return (rx, ry, rz)
+
+
+def sample_worley(x: float, y: float, z: float, size: int, seamless: bool,
+                  hash_period: int = None) -> float:
+    """Worley (cellular) noise - returns distance to nearest feature point."""
+    if seamless and hash_period and hash_period > 0:
+        period = hash_period
+    else:
+        period = size
+
+    ix, iy, iz = int(x), int(y), int(z)
+
+    min_dist = float("inf")
+    for dz in range(-1, 2):
+        for dy in range(-1, 2):
+            for dx in range(-1, 2):
+                cx = ix + dx
+                cy = iy + dy
+                cz = iz + dz
+
+                fx, fy, fz = x - cx, y - cy, z - cz
+
+                if seamless:
+                    fx -= _worley_hash_coord(cx, cy, cz, period)[0]
+                    fy -= _worley_hash_coord(cx, cy, cz, period)[1]
+                    fz -= _worley_hash_coord(cx, cy, cz, period)[2]
+
+                    # Wrap to find closest image
+                    if fx > 0.5:
+                        fx -= 1.0
+                    elif fx < -0.5:
+                        fx += 1.0
+                    if fy > 0.5:
+                        fy -= 1.0
+                    elif fy < -0.5:
+                        fy += 1.0
+                    if fz > 0.5:
+                        fz -= 1.0
+                    elif fz < -0.5:
+                        fz += 1.0
+                else:
+                    fx -= _worley_hash_coord(cx, cy, cz, period)[0]
+                    fy -= _worley_hash_coord(cx, cy, cz, period)[1]
+                    fz -= _worley_hash_coord(cx, cy, cz, period)[2]
+                    fx = max(0, min(1, fx))
+                    fy = max(0, min(1, fy))
+                    fz = max(0, min(1, fz))
+
+                dist_sq = fx * fx + fy * fy + fz * fz
+                if dist_sq < min_dist:
+                    min_dist = dist_sq
+
+    dist = math.sqrt(min_dist)
+    # Normalize: Worley distance ranges from 0 to ~0.5
+    return max(0.0, min(1.0, dist * 2.0))
+
+
+# ---------------------------------------------------------------------------
+# FBM Perlin Noise
+# ---------------------------------------------------------------------------
+
+def _perlin_hash(x: int, y: int, z: int) -> float:
+    """Hash for Perlin noise gradient selection."""
+    h = _hash_seed ^ (x * 374761393) ^ (y * 668265263) ^ (z * 1274126177)
+    h = (h ^ (h >> 13)) * 1103515245
+    h = h ^ (h >> 16)
+    return (h & 0x7FFFFFFF) / 0x7FFFFFFF
+
+
+def _perlin_gradient(x: int, y: int, z: int, dx: float, dy: float, dz: float) -> float:
+    """Compute gradient dot product for Perlin noise."""
+    h = _perlin_hash(x, y, z)
+    # Generate a random gradient direction from hash
+    gx = h * 2.0 - 1.0
+    h = (h ^ (h >> 8)) * 1103515245
+    h = h ^ (h >> 16)
+    gy = ((h & 0x7FFFFFFF) / 0x7FFFFFFF) * 2.0 - 1.0
+    h = ((h >> 4) ^ (h >> 12)) * 1103515245
+    h = h ^ (h >> 16)
+    gz = ((h & 0x7FFFFFFF) / 0x7FFFFFFF) * 2.0 - 1.0
+    return gx * dx + gy * dy + gz * dz
+
+
+def sample_perlin(x: float, y: float, z: float, size: int, seamless: bool,
+                  hash_period: int = None) -> float:
+    """3D Perlin noise with optional seamless wrapping."""
+    if seamless and hash_period and hash_period > 0:
+        period = hash_period
+    else:
+        period = size
+
+    ix, iy, iz = int(x), int(y), int(z)
+    fx, fy, fz = x - ix, y - iy, z - iz
+
+    fx = _smoothstep(fx)
+    fy = _smoothstep(fy)
+    fz = _smoothstep(fz)
+
+    if seamless:
+        def hash_wrapped(ix_val: int, iy_val: int, iz_val: int) -> float:
+            return _perlin_hash(
+                ix_val % period, iy_val % period, iz_val % period
+            )
+
+        def grad_wrapped(ix_val: int, iy_val: int, iz_val: int,
+                         dx_val: float, dy_val: float, dz_val: float) -> float:
+            return _perlin_gradient(
+                ix_val % period, iy_val % period, iz_val % period,
+                dx_val, dy_val, dz_val
+            )
+    else:
+        hash_wrapped = _perlin_hash
+        grad_wrapped = _perlin_gradient
+
+    h000 = hash_wrapped(ix, iy, iz)
+    h100 = hash_wrapped(ix + 1, iy, iz)
+    h010 = hash_wrapped(ix, iy + 1, iz)
+    h110 = hash_wrapped(ix + 1, iy + 1, iz)
+    h001 = hash_wrapped(ix, iy, iz + 1)
+    h101 = hash_wrapped(ix + 1, iy, iz + 1)
+    h011 = hash_wrapped(ix, iy + 1, iz + 1)
+    h111 = hash_wrapped(ix + 1, iy + 1, iz + 1)
+
+    g000 = grad_wrapped(ix, iy, iz, fx, fy, fz)
+    g100 = grad_wrapped(ix + 1, iy, iz, fx - 1, fy, fz)
+    g010 = grad_wrapped(ix, iy + 1, iz, fx, fy - 1, fz)
+    g110 = grad_wrapped(ix + 1, iy + 1, iz, fx - 1, fy - 1, fz)
+    g001 = grad_wrapped(ix, iy, iz + 1, fx, fy, fz - 1)
+    g101 = grad_wrapped(ix + 1, iy, iz + 1, fx - 1, fy, fz - 1)
+    g011 = grad_wrapped(ix, iy + 1, iz + 1, fx, fy - 1, fz - 1)
+    g111 = grad_wrapped(ix + 1, iy + 1, iz + 1, fx - 1, fy - 1, fz - 1)
+
+    nx00 = _lerp(g000, g100, fx)
+    nx01 = _lerp(g010, g110, fx)
+    nx10 = _lerp(g001, g101, fx)
+    nx11 = _lerp(g011, g111, fx)
+
+    nx0 = _lerp(nx00, nx01, fy)
+    nx1 = _lerp(nx10, nx11, fy)
+
+    return _lerp(nx0, nx1, fz)
+
+
+# ---------------------------------------------------------------------------
+# Dispatcher
+# ---------------------------------------------------------------------------
+
+def sample_noise(x: float, y: float, z: float, size: int, seamless: bool,
+                 octaves: int = 4, base_freq: float = 1.0,
+                 hash_period: int = None, noise_type: str = "Value Noise") -> float:
+    """Dispatch to the appropriate noise sampler."""
+    if noise_type == "Worley Noise":
+        return sample_worley(x, y, z, size, seamless, hash_period)
+    elif noise_type == "FBM Perlin Noise":
+        return sample_perlin(x, y, z, size, seamless, hash_period)
+    else:
+        return sample_3d(x, y, z, size, seamless, octaves, base_freq, hash_period)
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +385,7 @@ class App:
         ttk.Label(main, text="Noise Type:").grid(row=5, column=0, sticky=tk.W, pady=4)
         noise_frame = ttk.Frame(main)
         noise_frame.grid(row=5, column=1, sticky=tk.EW, pady=4, padx=(8, 0))
-        ttk.Combobox(noise_frame, textvariable=self.noise_type_var, values=["Value Noise"], state="readonly", width=20).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Combobox(noise_frame, textvariable=self.noise_type_var, values=["Value Noise", "Worley Noise", "FBM Perlin Noise"], state="readonly", width=20).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         # --- Row 7: Output Path ---
         ttk.Label(main, text="Output:").grid(row=7, column=0, sticky=tk.W, pady=4)
@@ -235,7 +414,7 @@ class App:
     def _validate_freq(self):
         try:
             v = float(self.base_freq_var.get())
-            self.base_freq_var.set(max(0.01, min(1.0, v)))
+            self.base_freq_var.set(max(0.01, min(10.0, v)))
         except ValueError:
             self.base_freq_var.set(0.1)
 
