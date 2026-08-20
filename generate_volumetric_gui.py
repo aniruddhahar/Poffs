@@ -664,7 +664,7 @@ class App:
         self._update_status("Generating preview...", 0)
         self._toggle_buttons()
 
-        preview_size = 256
+        volume_size = 16
         seamless = self.seamless_var.get()
         octaves = self.octaves_var.get()
         seed = self.seed_var.get()
@@ -677,7 +677,7 @@ class App:
             try:
                 self._update_status("Computing volume...", 10)
                 volume = generate_volume(
-                    preview_size, seamless, octaves=octaves,
+                    volume_size, seamless, octaves=octaves,
                     base_freq=base_freq, noise_type=self.noise_type_var.get(),
                     cancel_event=self._cancel_event
                 )
@@ -687,22 +687,22 @@ class App:
                     return
 
                 self._update_status("Building grid...", 70)
-                cols = math.ceil(math.sqrt(preview_size))
-                rows = math.ceil(preview_size / cols)
-                total_w = cols * preview_size
-                total_h = rows * preview_size
+                cols = math.ceil(math.sqrt(volume_size))
+                rows = math.ceil(volume_size / cols)
+                total_w = cols * volume_size
+                total_h = rows * volume_size
                 grid = [[0] * total_w for _ in range(total_h)]
 
-                for s in range(preview_size):
+                for s in range(volume_size):
                     col = s % cols
                     row = s // cols
-                    for y in range(preview_size):
-                        for x in range(preview_size):
+                    for y in range(volume_size):
+                        for x in range(volume_size):
                             val = int(round(volume[s][y][x] * 255))
-                            grid[row * preview_size + y][col * preview_size + x] = max(0, min(255, val))
+                            grid[row * volume_size + y][col * volume_size + x] = max(0, min(255, val))
 
-                    pct = 70 + (s / preview_size) * 25
-                    self.root.after(0, self._update_status, f"Building grid... ({s+1}/{preview_size})", pct)
+                    pct = 70 + (s / volume_size) * 25
+                    self.root.after(0, self._update_status, f"Building grid... ({s+1}/{volume_size})", pct)
 
                 self.root.after(0, self._preview_ready, grid)
             except Exception as e:
