@@ -653,7 +653,7 @@ class App:
         data = []
         for row in grid:
             row_strs = [f"#{v:02x}{v:02x}{v:02x}" for v in row]
-            data.append(" ".join(row_strs))
+            data.append("{" + " ".join(row_strs) + "}")
         self.preview_image.put(" ".join(data))
 
     def _show_preview(self):
