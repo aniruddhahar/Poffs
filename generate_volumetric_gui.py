@@ -347,6 +347,7 @@ class App:
         self.base_freq_var = tk.DoubleVar(value=1.0)
         self.progress = tk.DoubleVar(value=0.0)
         self.generating = False
+        self.preview_image = tk.PhotoImage(width=256, height=256)
 
         self._build_ui()
 
@@ -354,19 +355,23 @@ class App:
         main = ttk.Frame(self.root, padding=12)
         main.pack(fill=tk.BOTH, expand=True)
 
+        # --- Controls Frame ---
+        ctrl_frame = ttk.Frame(main)
+        ctrl_frame.pack(fill=tk.X, pady=(0, 12))
+
         # --- Row 1: Size ---
-        ttk.Label(main, text="Size (LxLxL):").grid(row=0, column=0, sticky=tk.W, pady=4)
-        size_frame = ttk.Frame(main)
+        ttk.Label(ctrl_frame, text="Size (LxLxL):").grid(row=0, column=0, sticky=tk.W, pady=4)
+        size_frame = ttk.Frame(ctrl_frame)
         size_frame.grid(row=0, column=1, sticky=tk.EW, pady=4)
         ttk.Combobox(size_frame, textvariable=self.size_var, values=["16", "64", "256", "1024"], state="readonly", width=6).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         # --- Row 2: Seed ---
-        ttk.Label(main, text="Seed:").grid(row=1, column=0, sticky=tk.W, pady=4)
-        ttk.Entry(main, textvariable=self.seed_var, width=10).grid(row=1, column=1, sticky=tk.W, pady=4, padx=(8, 0))
+        ttk.Label(ctrl_frame, text="Seed:").grid(row=1, column=0, sticky=tk.W, pady=4)
+        ttk.Entry(ctrl_frame, textvariable=self.seed_var, width=10).grid(row=1, column=1, sticky=tk.W, pady=4, padx=(8, 0))
 
         # --- Row 3: Base Frequency ---
-        ttk.Label(main, text="Base Freq:").grid(row=2, column=0, sticky=tk.W, pady=4)
-        freq_frame = ttk.Frame(main)
+        ttk.Label(ctrl_frame, text="Base Freq:").grid(row=2, column=0, sticky=tk.W, pady=4)
+        freq_frame = ttk.Frame(ctrl_frame)
         freq_frame.grid(row=2, column=1, sticky=tk.EW, pady=4)
         ttk.Scale(freq_frame, from_=0.01, to=10.0, orient=tk.HORIZONTAL,
                   variable=self.base_freq_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
@@ -375,32 +380,32 @@ class App:
         freq_entry.bind("<Return>", lambda e: self._validate_freq())
 
         # --- Row 4: Octaves ---
-        ttk.Label(main, text="Octaves:").grid(row=3, column=0, sticky=tk.W, pady=4)
-        oct_frame = ttk.Frame(main)
+        ttk.Label(ctrl_frame, text="Octaves:").grid(row=3, column=0, sticky=tk.W, pady=4)
+        oct_frame = ttk.Frame(ctrl_frame)
         oct_frame.grid(row=3, column=1, sticky=tk.EW, pady=4)
         ttk.Scale(oct_frame, from_=1, to=8, orient=tk.HORIZONTAL,
                   variable=self.octaves_var, command=lambda v: self.octaves_var.set(int(float(v)))).pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Label(oct_frame, textvariable=self.octaves_var, width=4).pack(side=tk.LEFT, padx=(6, 0))
 
         # --- Row 5: Seamless ---
-        ttk.Checkbutton(main, text="Seamless Tiling", variable=self.seamless_var).grid(
+        ttk.Checkbutton(ctrl_frame, text="Seamless Tiling", variable=self.seamless_var).grid(
             row=4, column=1, sticky=tk.W, pady=4, padx=(8, 0))
 
         # --- Row 6: Noise Type ---
-        ttk.Label(main, text="Noise Type:").grid(row=5, column=0, sticky=tk.W, pady=4)
-        noise_frame = ttk.Frame(main)
+        ttk.Label(ctrl_frame, text="Noise Type:").grid(row=5, column=0, sticky=tk.W, pady=4)
+        noise_frame = ttk.Frame(ctrl_frame)
         noise_frame.grid(row=5, column=1, sticky=tk.EW, pady=4, padx=(8, 0))
         ttk.Combobox(noise_frame, textvariable=self.noise_type_var, values=["Value Noise", "Worley Noise", "FBM Perlin Noise"], state="readonly", width=20).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         # --- Row 7: Output Path ---
-        ttk.Label(main, text="Output:").grid(row=7, column=0, sticky=tk.W, pady=4)
-        out_frame = ttk.Frame(main)
+        ttk.Label(ctrl_frame, text="Output:").grid(row=7, column=0, sticky=tk.W, pady=4)
+        out_frame = ttk.Frame(ctrl_frame)
         out_frame.grid(row=7, column=1, sticky=tk.EW, pady=4, padx=(8, 0))
         ttk.Entry(out_frame, textvariable=self.output_path, width=30).pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(out_frame, text="Browse...", command=self._browse_output).pack(side=tk.LEFT, padx=(6, 0))
 
         # --- Row 8: Progress ---
-        progress_frame = ttk.Frame(main)
+        progress_frame = ttk.Frame(ctrl_frame)
         progress_frame.grid(row=8, column=0, columnspan=2, sticky=tk.EW, pady=8)
         self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress, maximum=100)
         self.progress_bar.pack(fill=tk.X)
@@ -408,13 +413,18 @@ class App:
         self.status_label.pack(fill=tk.X, pady=(2, 0))
 
         # --- Row 9: Buttons ---
-        btn_frame = ttk.Frame(main)
+        btn_frame = ttk.Frame(ctrl_frame)
         btn_frame.grid(row=9, column=0, columnspan=2, pady=10)
-        ttk.Button(btn_frame, text="Generate Preview (64³)", command=lambda: self._start_generation(64)).pack(side=tk.LEFT, expand=True, padx=(0, 4))
-        ttk.Button(btn_frame, text="Generate Full", command=self._start_generation).pack(side=tk.LEFT, expand=True, padx=(4, 0))
+        ttk.Button(btn_frame, text="Preview", command=self._show_preview).pack(side=tk.LEFT, expand=True, padx=(0, 4))
+        ttk.Button(btn_frame, text="Render", command=self._render).pack(side=tk.LEFT, expand=True, padx=(4, 0))
 
-        # --- Grid config ---
-        main.columnconfigure(1, weight=1)
+        ctrl_frame.columnconfigure(1, weight=1)
+
+        # --- Preview Frame ---
+        preview_outer = ttk.LabelFrame(main, text="Preview", padding=6)
+        preview_outer.pack(fill=tk.BOTH, expand=True, pady=(12, 0))
+        self.preview_label = ttk.Label(preview_outer, image=self.preview_image, relief=tk.SUNKEN)
+        self.preview_label.pack(fill=tk.BOTH, expand=True)
 
     def _validate_freq(self):
         try:
@@ -438,13 +448,73 @@ class App:
             self.progress.set(progress)
             self.root.update_idletasks()
 
-    def _start_generation(self, override_size: int = None):
+    def _grid_to_photo(self, grid: list[list[int]]) -> None:
+        """Convert a 2D grayscale grid to PhotoImage pixels."""
+        data = []
+        for row in grid:
+            row_strs = [f"#{v:02x}{v:02x}{v:02x}" for v in row]
+            data.append(" ".join(row_strs))
+        self.preview_image.put(" ".join(data))
+
+    def _show_preview(self):
         if self.generating:
             return
         self.generating = True
-        self._update_status("Generating...", 0)
+        self._update_status("Generating preview...", 0)
 
-        size = override_size if override_size is not None else int(self.size_var.get())
+        preview_size = 256
+        seamless = self.seamless_var.get()
+        octaves = self.octaves_var.get()
+        seed = self.seed_var.get()
+        base_freq = self.base_freq_var.get()
+
+        global _hash_seed
+        _hash_seed = seed
+
+        def worker():
+            try:
+                self._update_status("Computing volume...", 10)
+                volume = generate_volume(
+                    preview_size, seamless, octaves=octaves,
+                    base_freq=base_freq, noise_type=self.noise_type_var.get()
+                )
+
+                self._update_status("Building grid...", 70)
+                cols = math.ceil(math.sqrt(preview_size))
+                rows = math.ceil(preview_size / cols)
+                total_w = cols * preview_size
+                total_h = rows * preview_size
+                grid = [[0] * total_w for _ in range(total_h)]
+
+                for s in range(preview_size):
+                    col = s % cols
+                    row = s // cols
+                    for y in range(preview_size):
+                        for x in range(preview_size):
+                            val = int(round(volume[s][y][x] * 255))
+                            grid[row * preview_size + y][col * preview_size + x] = max(0, min(255, val))
+
+                    pct = 70 + (s / preview_size) * 25
+                    self.root.after(0, self._update_status, f"Building grid... ({s+1}/{preview_size})", pct)
+
+                self.root.after(0, self._preview_ready, grid)
+            except Exception as e:
+                self.root.after(0, self._generation_failed, str(e))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _preview_ready(self, grid: list[list[int]]):
+        self.generating = False
+        self._grid_to_photo(grid)
+        self._update_status("Preview ready", 100)
+
+    def _render(self):
+        if self.generating:
+            return
+        self.generating = True
+        self._update_status("Rendering...", 0)
+
+        size = int(self.size_var.get())
         seamless = self.seamless_var.get()
         octaves = self.octaves_var.get()
         seed = self.seed_var.get()
@@ -457,7 +527,10 @@ class App:
         def worker():
             try:
                 self._update_status("Computing volume...", 10)
-                volume = generate_volume(size, seamless, octaves=octaves, base_freq=base_freq, noise_type=self.noise_type_var.get())
+                volume = generate_volume(
+                    size, seamless, octaves=octaves,
+                    base_freq=base_freq, noise_type=self.noise_type_var.get()
+                )
 
                 self._update_status("Building grid...", 70)
                 cols = math.ceil(math.sqrt(size))
