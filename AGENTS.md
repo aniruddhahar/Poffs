@@ -28,6 +28,8 @@ python generate_volumetric_gui.py
 | `--octaves` | int | 4 | Number of noise octaves for detail |
 | `--seed` | int | 42 | Random seed for reproducibility |
 | `--base-freq` | float | 1.0 | Base noise frequency |
+| `--lacunarity` | float | 2.0 | Frequency multiplier between octaves |
+| `--noise-type` | str | value | Noise algorithm: `value`, `worley`, `perlin` |
 
 ## GUI Features
 - **Noise Types:** Value Noise, Worley Noise (cellular), FBM Perlin Noise
@@ -39,11 +41,11 @@ python generate_volumetric_gui.py
 - **Output:** File browser for save path, completion dialog with stats
 
 ## Architecture Notes
-- CLI generates value noise only; GUI adds Worley and FBM Perlin noise variants
-- GUI pre-computes hash/value/gradient tables per octave for performance
-- Both files contain duplicated PNG writer functions (not shared via import)
+- Both CLI and GUI share identical noise algorithms via imports (`generate_volumetric_gui.py` imports from `generate_volumetric.py`)
+- Generation logic is centralized in `generate_volumetric.py`; GUI adds only Tkinter UI layer
+- Pre-computes hash/value/gradient tables per octave for performance; caps table size at `MAX_TABLE_PERIOD = 128` to prevent freeze at high frequencies
 - GUI uses threading for generation; updates UI via `root.after()`
-- Seed is set via module-level global `_hash_seed` (GUI) or function param (CLI)
+- Seed is passed as function parameter to all generation functions
 - Output is always greyscale PNG: each cell in the grid is one Z-slice
 - FBM (Fractal Brownian Motion) combines multiple octaves with decreasing amplitude
 - Reference size L is chosen so that `L * sqrt(L)` is always a power of two
