@@ -33,7 +33,7 @@ python generate_volumetric_gui.py
 
 ## GUI Features
 - **Noise Types:** Value Noise, Worley Noise (cellular), FBM Perlin Noise
-- **Controls:** Reference Size (L ∈ {4,16,64,256}), Noise Type dropdown, Base Freq, Seed, Octaves, Lacunarity, Seamless toggle
+- **Controls:** Reference Size (L ∈ {4,16,64,256}), Noise Type dropdown, Base Freq, Seed, Octaves, Lacunarity
 - **Output:** Browseable PNG path
 - **Workflow:** Preview (fixed 16³ volume, upscaled to 256px) → Render (full L³ size to file)
 - **Layout:** Controls panel on left, live preview on right
@@ -43,6 +43,7 @@ python generate_volumetric_gui.py
 ## Architecture Notes
 - Both CLI and GUI share identical noise algorithms via imports (`generate_volumetric_gui.py` imports from `generate_volumetric.py`)
 - Generation logic is centralized in `generate_volumetric.py`; GUI adds only Tkinter UI layer
+- All textures use seamless 3D tiling by default (modulo-based wrapping)
 - Pre-computes hash/value/gradient tables per octave for performance; caps table size at `MAX_TABLE_PERIOD = 128` to prevent freeze at high frequencies
 - GUI uses threading for generation; updates UI via `root.after()`
 - Seed is passed as function parameter to all generation functions

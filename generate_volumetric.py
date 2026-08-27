@@ -8,7 +8,7 @@ where each cell is a vertical (Z-axis) slice of the volume.
 Supports three noise types: Value Noise, Worley (Cellular), and FBM Perlin Noise.
 
 Usage:
-    python generate_volumetric.py --size 64 --output texture.png --seamless true
+    python generate_volumetric.py --size 64 --output texture.png
     python generate_volumetric.py --size 64 --noise-type worley --lacunarity 2.5 --seed 123
 """
 
@@ -106,21 +106,16 @@ def _perlin_gradient(x: int, y: int, z: int, seed: int) -> tuple[float, float, f
 # Value Noise
 # ---------------------------------------------------------------------------
 
-def _sample_value_3d(sx: float, sy: float, sz: float, period: int, seed: int, seamless: bool) -> float:
-    """Sample 3D value noise at floating-point coordinates."""
+def _sample_value_3d(sx: float, sy: float, sz: float, period: int, seed: int) -> float:
+    """Sample 3D value noise at floating-point coordinates (seamless)."""
     ix, iy, iz = int(sx), int(sy), int(sz)
     fx = _smoothstep(sx - ix)
     fy = _smoothstep(sy - iy)
     fz = _smoothstep(sz - iz)
 
-    if seamless:
-        i0x, i1x = ix % period, (ix + 1) % period
-        i0y, i1y = iy % period, (iy + 1) % period
-        i0z, i1z = iz % period, (iz + 1) % period
-    else:
-        i0x, i1x = max(0, ix), min(period - 1, ix + 1)
-        i0y, i1y = max(0, iy), min(period - 1, iy + 1)
-        i0z, i1z = max(0, iz), min(period - 1, iz + 1)
+    i0x, i1x = ix % period, (ix + 1) % period
+    i0y, i1y = iy % period, (iy + 1) % period
+    i0z, i1z = iz % period, (iz + 1) % period
 
     h000 = _hash_coord(i0x, i0y, i0z, seed)
     h100 = _hash_coord(i1x, i0y, i0z, seed)
@@ -148,20 +143,15 @@ def _precompute_value_table(period: int, seed: int) -> list[list[list[float]]]:
     return table
 
 def _sample_value_table(cx: float, cy: float, cz: float, table: list[list[list[float]]],
-                        period: int, seamless: bool) -> float:
+                        period: int) -> float:
     ix, iy, iz = int(cx), int(cy), int(cz)
     fx = _smoothstep(cx - ix)
     fy = _smoothstep(cy - iy)
     fz = _smoothstep(cz - iz)
 
-    if seamless:
-        i0x, i1x = ix % period, (ix + 1) % period
-        i0y, i1y = iy % period, (iy + 1) % period
-        i0z, i1z = iz % period, (iz + 1) % period
-    else:
-        i0x, i1x = max(0, ix), min(period - 1, ix + 1)
-        i0y, i1y = max(0, iy), min(period - 1, iy + 1)
-        i0z, i1z = max(0, iz), min(period - 1, iz + 1)
+    i0x, i1x = ix % period, (ix + 1) % period
+    i0y, i1y = iy % period, (iy + 1) % period
+    i0z, i1z = iz % period, (iz + 1) % period
 
     h000 = table[i0z][i0y][i0x]
     h100 = table[i0z][i0y][i1x]
@@ -193,41 +183,32 @@ def _precompute_worley_table(period: int, seed: int) -> list[list[tuple[float, f
     return table
 
 def _sample_worley_table(cx: float, cy: float, cz: float, table: list[list[tuple[float, float, float]]],
-                         period: int, seamless: bool) -> float:
+                         period: int) -> float:
     ix, iy, iz = int(cx), int(cy), int(cz)
     min_dist = float("inf")
 
     for dz in range(-1, 2):
         for dy in range(-1, 2):
             for dx in range(-1, 2):
-                if seamless:
-                    cx_i = (ix + dx) % period
-                    cy_i = (iy + dy) % period
-                    cz_i = (iz + dz) % period
-                    feat = table[cz_i][cy_i][cx_i]
-                    fx = cx - ix - feat[0]
-                    fy = cy - iy - feat[1]
-                    fz = cz - iz - feat[2]
-                    if fx > 0.5:
-                        fx -= 1.0
-                    elif fx < -0.5:
-                        fx += 1.0
-                    if fy > 0.5:
-                        fy -= 1.0
-                    elif fy < -0.5:
-                        fy += 1.0
-                    if fz > 0.5:
-                        fz -= 1.0
-                    elif fz < -0.5:
-                        fz += 1.0
-                else:
-                    cx_i = max(0, min(period - 1, ix + dx))
-                    cy_i = max(0, min(period - 1, iy + dy))
-                    cz_i = max(0, min(period - 1, iz + dz))
-                    feat = table[cz_i][cy_i][cx_i]
-                    fx = max(0, min(1, cx - ix - feat[0]))
-                    fy = max(0, min(1, cy - iy - feat[1]))
-                    fz = max(0, min(1, cz - iz - feat[2]))
+                cx_i = (ix + dx) % period
+                cy_i = (iy + dy) % period
+                cz_i = (iz + dz) % period
+                feat = table[cz_i][cy_i][cx_i]
+                fx = cx - ix - feat[0]
+                fy = cy - iy - feat[1]
+                fz = cz - iz - feat[2]
+                if fx > 0.5:
+                    fx -= 1.0
+                elif fx < -0.5:
+                    fx += 1.0
+                if fy > 0.5:
+                    fy -= 1.0
+                elif fy < -0.5:
+                    fy += 1.0
+                if fz > 0.5:
+                    fz -= 1.0
+                elif fz < -0.5:
+                    fz += 1.0
 
                 dist_sq = fx * fx + fy * fy + fz * fz
                 if dist_sq < min_dist:
@@ -235,8 +216,7 @@ def _sample_worley_table(cx: float, cy: float, cz: float, table: list[list[tuple
 
     return max(0.0, min(1.0, math.sqrt(min_dist) * 2.0))
 
-def _sample_worley_direct(sx: float, sy: float, sz: float, hash_period: int, seed: int,
-                          seamless: bool) -> float:
+def _sample_worley_direct(sx: float, sy: float, sz: float, hash_period: int, seed: int) -> float:
     """Direct Worley noise sampling without precomputed table."""
     ix, iy, iz = int(sx), int(sy), int(sz)
 
@@ -244,14 +224,9 @@ def _sample_worley_direct(sx: float, sy: float, sz: float, hash_period: int, see
     for dz in range(-1, 2):
         for dy in range(-1, 2):
             for dx in range(-1, 2):
-                if seamless:
-                    cx_i = (ix + dx) % hash_period
-                    cy_i = (iy + dy) % hash_period
-                    cz_i = (iz + dz) % hash_period
-                else:
-                    cx_i = max(0, min(hash_period - 1, ix + dx))
-                    cy_i = max(0, min(hash_period - 1, iy + dy))
-                    cz_i = max(0, min(hash_period - 1, iz + dz))
+                cx_i = (ix + dx) % hash_period
+                cy_i = (iy + dy) % hash_period
+                cz_i = (iz + dz) % hash_period
                 neighbors[(dx, dy, dz)] = _worley_hash_coord(cx_i, cy_i, cz_i, seed)
 
     min_dist = float("inf")
@@ -259,26 +234,21 @@ def _sample_worley_direct(sx: float, sy: float, sz: float, hash_period: int, see
         for dy in range(-1, 2):
             for dx in range(-1, 2):
                 feat = neighbors[(dx, dy, dz)]
-                if seamless:
-                    fx = sx - ix - feat[0]
-                    fy = sy - iy - feat[1]
-                    fz = sz - iz - feat[2]
-                    if fx > 0.5:
-                        fx -= 1.0
-                    elif fx < -0.5:
-                        fx += 1.0
-                    if fy > 0.5:
-                        fy -= 1.0
-                    elif fy < -0.5:
-                        fy += 1.0
-                    if fz > 0.5:
-                        fz -= 1.0
-                    elif fz < -0.5:
-                        fz += 1.0
-                else:
-                    fx = max(0, min(1, sx - ix - feat[0]))
-                    fy = max(0, min(1, sy - iy - feat[1]))
-                    fz = max(0, min(1, sz - iz - feat[2]))
+                fx = sx - ix - feat[0]
+                fy = sy - iy - feat[1]
+                fz = sz - iz - feat[2]
+                if fx > 0.5:
+                    fx -= 1.0
+                elif fx < -0.5:
+                    fx += 1.0
+                if fy > 0.5:
+                    fy -= 1.0
+                elif fy < -0.5:
+                    fy += 1.0
+                if fz > 0.5:
+                    fz -= 1.0
+                elif fz < -0.5:
+                    fz += 1.0
 
                 dist_sq = fx * fx + fy * fy + fz * fz
                 if dist_sq < min_dist:
@@ -299,20 +269,15 @@ def _precompute_perlin_table(period: int, seed: int) -> list[list[tuple[float, f
     return table
 
 def _sample_perlin_table(cx: float, cy: float, cz: float, table: list[list[tuple[float, float, float]]],
-                         period: int, seamless: bool) -> float:
+                         period: int) -> float:
     ix, iy, iz = int(cx), int(cy), int(cz)
     dx = _smoothstep(cx - ix)
     dy = _smoothstep(cy - iy)
     dz = _smoothstep(cz - iz)
 
-    if seamless:
-        i0x, i1x = ix % period, (ix + 1) % period
-        i0y, i1y = iy % period, (iy + 1) % period
-        i0z, i1z = iz % period, (iz + 1) % period
-    else:
-        i0x, i1x = max(0, ix), min(period - 1, ix + 1)
-        i0y, i1y = max(0, iy), min(period - 1, iy + 1)
-        i0z, i1z = max(0, iz), min(period - 1, iz + 1)
+    i0x, i1x = ix % period, (ix + 1) % period
+    i0y, i1y = iy % period, (iy + 1) % period
+    i0z, i1z = iz % period, (iz + 1) % period
 
     def dot(g, dx_val, dy_val, dz_val):
         return g[0] * dx_val + g[1] * dy_val + g[2] * dz_val
@@ -334,22 +299,16 @@ def _sample_perlin_table(cx: float, cy: float, cz: float, table: list[list[tuple
     nx1 = _lerp(nx10, nx11, dy)
     return _lerp(nx0, nx1, dz)
 
-def _sample_perlin_direct(sx: float, sy: float, sz: float, hash_period: int, seed: int,
-                          seamless: bool) -> float:
+def _sample_perlin_direct(sx: float, sy: float, sz: float, hash_period: int, seed: int) -> float:
     """Direct Perlin noise sampling without precomputed table."""
     ix, iy, iz = int(sx), int(sy), int(sz)
     dx = _smoothstep(sx - ix)
     dy = _smoothstep(sy - iy)
     dz = _smoothstep(sz - iz)
 
-    if seamless:
-        i0x, i1x = ix % hash_period, (ix + 1) % hash_period
-        i0y, i1y = iy % hash_period, (iy + 1) % hash_period
-        i0z, i1z = iz % hash_period, (iz + 1) % hash_period
-    else:
-        i0x, i1x = max(0, ix), min(hash_period - 1, ix + 1)
-        i0y, i1y = max(0, iy), min(hash_period - 1, iy + 1)
-        i0z, i1z = max(0, iz), min(hash_period - 1, iz + 1)
+    i0x, i1x = ix % hash_period, (ix + 1) % hash_period
+    i0y, i1y = iy % hash_period, (iy + 1) % hash_period
+    i0z, i1z = iz % hash_period, (iz + 1) % hash_period
 
     def dot(g, dx_val, dy_val, dz_val):
         return g[0] * dx_val + g[1] * dy_val + g[2] * dz_val
@@ -379,20 +338,19 @@ def _sample_perlin_direct(sx: float, sy: float, sz: float, hash_period: int, see
 # 128^3 = 2M entries (~16 MB for floats). Larger periods cause freeze at high freq.
 MAX_TABLE_PERIOD = 128
 
-def _generate_volume(size: int, seamless: bool, octaves: int, base_freq: float,
+def _generate_volume(size: int, octaves: int, base_freq: float,
                      lacunarity: float, seed: int, noise_type: str,
                      cancel_event=None) -> list[list[list[float]]]:
     """Generate LxLxL volume using pre-computed tables for performance."""
     octave_tables = []
     for octave_idx in range(octaves):
         octave_freq = base_freq * (lacunarity ** octave_idx)
-        hash_period = max(2, round(size * octave_freq)) if seamless else size
+        hash_period = max(2, round(size * octave_freq))
 
-        if noise_type != "Value Noise":
-            # Cap table size to prevent freeze at high frequencies
-            if hash_period > MAX_TABLE_PERIOD:
-                octave_tables.append((hash_period, None))
-                continue
+        # Cap table size to prevent freeze at high frequencies
+        if hash_period > MAX_TABLE_PERIOD:
+            octave_tables.append((hash_period, None))
+            continue
 
         if noise_type == "Worley Noise":
             table = _precompute_worley_table(hash_period, seed)
@@ -424,26 +382,26 @@ def _generate_volume(size: int, seamless: bool, octaves: int, base_freq: float,
                         # Use direct sampling for capped tables
                         if noise_type == "Worley Noise":
                             val += amplitude * _sample_worley_direct(
-                                coord_x, coord_y, coord_z, hash_period, seed, seamless)
+                                coord_x, coord_y, coord_z, hash_period, seed)
                         elif noise_type == "FBM Perlin Noise":
                             val += amplitude * _sample_perlin_direct(
-                                coord_x, coord_y, coord_z, hash_period, seed, seamless)
+                                coord_x, coord_y, coord_z, hash_period, seed)
                         else:
                             val += amplitude * _sample_value_3d(
-                                coord_x, coord_y, coord_z, hash_period, seed, seamless)
+                                coord_x, coord_y, coord_z, hash_period, seed)
                         max_val += amplitude
                         amplitude *= 0.5
                         continue
 
                     if noise_type == "Worley Noise":
                         val += amplitude * _sample_worley_table(
-                            coord_x, coord_y, coord_z, table, hash_period, seamless)
+                            coord_x, coord_y, coord_z, table, hash_period)
                     elif noise_type == "FBM Perlin Noise":
                         val += amplitude * _sample_perlin_table(
-                            coord_x, coord_y, coord_z, table, hash_period, seamless)
+                            coord_x, coord_y, coord_z, table, hash_period)
                     else:
                         val += amplitude * _sample_value_table(
-                            coord_x, coord_y, coord_z, table, hash_period, seamless)
+                            coord_x, coord_y, coord_z, table, hash_period)
 
                     max_val += amplitude
                     amplitude *= 0.5
@@ -514,14 +472,12 @@ def main():
                         help="Cube dimension L (default: 64)")
     parser.add_argument("--output", "-o", type=str, default="volumetric_texture.png",
                         help="Output PNG path")
-    parser.add_argument("--seamless", type=str, choices=["true", "false"],
-                        default="true", help="Seamless 3D tiling (true/false)")
     parser.add_argument("--octaves", type=int, default=4,
                         help="Number of noise octaves for detail (default: 4)")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility (default: 42)")
-    parser.add_argument("--base-freq", type=float, default=1.0,
-                        help="Base noise frequency (default: 1.0)")
+    parser.add_argument("--base-freq", type=float, default=0.01,
+                        help="Base noise frequency (default: 0.01)")
     parser.add_argument("--lacunarity", type=float, default=2.0,
                         help="Frequency multiplier between octaves (default: 2.0)")
     parser.add_argument("--noise-type", type=str, choices=["value", "worley", "perlin"],
@@ -529,20 +485,18 @@ def main():
     args = parser.parse_args()
 
     size = args.size
-    seamless = args.seamless == "true"
     noise_type_map = {"value": "Value Noise", "worley": "Worley Noise", "perlin": "FBM Perlin Noise"}
     noise_type = noise_type_map[args.noise_type]
     
     print(f"Generating {size}x{size}x{size} volumetric texture ...")
     print(f"  Noise type      : {noise_type}")
-    print(f"  Seamless tiling : {seamless}")
     print(f"  Octaves         : {args.octaves}")
     print(f"  Base frequency  : {args.base_freq}")
     print(f"  Lacunarity      : {args.lacunarity}")
     print(f"  Seed            : {args.seed}")
 
     volume = _generate_volume(
-        size, seamless, octaves=args.octaves, base_freq=args.base_freq,
+        size, octaves=args.octaves, base_freq=args.base_freq,
         lacunarity=args.lacunarity, seed=args.seed, noise_type=noise_type
     )
 

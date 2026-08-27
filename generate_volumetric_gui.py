@@ -42,11 +42,10 @@ class App:
         self.output_path = tk.StringVar(value=str(Path("volumetric_texture.png").resolve()))
         self.size_var = tk.StringVar(value="64")
         self.noise_type_var = tk.StringVar(value="Value Noise")
-        self.base_freq_var = tk.DoubleVar(value=1.0)
+        self.base_freq_var = tk.DoubleVar(value=0.01)
         self.seed_var = tk.IntVar(value=42)
         self.octaves_var = tk.IntVar(value=4)
         self.lacunarity_var = tk.DoubleVar(value=2.0)
-        self.seamless_var = tk.BooleanVar(value=True)
         self.progress = tk.DoubleVar(value=0.0)
         self.generating = False
         self._cancel_event = threading.Event()
@@ -99,10 +98,6 @@ class App:
         ttk.Scale(lac_frame, from_=0.0, to=2.0,
                   variable=self.lacunarity_var, orient=tk.HORIZONTAL).pack(fill=tk.X, expand=True)
         ttk.Label(lac_frame, textvariable=self.lacunarity_var, width=6).pack(side=tk.LEFT, padx=(6, 0))
-
-        # Seamless
-        ttk.Checkbutton(ctrl_frame, text="Seamless Tiling",
-                        variable=self.seamless_var).pack(anchor=tk.W, pady=(8, 4))
 
         # Output Path
         ttk.Label(ctrl_frame, text="Output:").pack(anchor=tk.W, pady=(8, 2))
@@ -175,8 +170,7 @@ class App:
         def worker():
             try:
                 seed = self.seed_var.get()
-                size = DEFAULT_PREVIEW_SIZE
-                seamless = self.seamless_var.get()
+                size = int(self.size_var.get())
                 octaves = self.octaves_var.get()
                 base_freq = self.base_freq_var.get()
                 lacunarity = self.lacunarity_var.get()
@@ -184,7 +178,7 @@ class App:
 
                 self.root.after(0, self._update_status, "Computing volume...", 20)
                 volume = _generate_volume(
-                    size, seamless, octaves, base_freq, lacunarity,
+                    size, octaves, base_freq, lacunarity,
                     seed, noise_type, self._cancel_event
                 )
                 if self._cancel_event.is_set():
@@ -219,7 +213,6 @@ class App:
             try:
                 seed = self.seed_var.get()
                 size = int(self.size_var.get())
-                seamless = self.seamless_var.get()
                 octaves = self.octaves_var.get()
                 base_freq = self.base_freq_var.get()
                 lacunarity = self.lacunarity_var.get()
@@ -228,7 +221,7 @@ class App:
 
                 self.root.after(0, self._update_status, "Computing volume...", 10)
                 volume = _generate_volume(
-                    size, seamless, octaves, base_freq, lacunarity,
+                    size, octaves, base_freq, lacunarity,
                     seed, noise_type, self._cancel_event
                 )
                 if self._cancel_event.is_set():
