@@ -57,4 +57,4 @@ python generate_volumetric_gui.py
 - No tests, no linting, no type checking configured
 - Python 3.10+ (uses `list[list[int]]` type hints)
 - GUI requires display server (won't work in headless environments)
-- Large sizes (256³, 1024³) may be slow and consume significant memory
+- Large sizes (256³) may be slow and consume significant memory
