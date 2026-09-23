@@ -49,6 +49,17 @@ Frequency multiplier between octaves. Range: 0–2 (via slider). Default: 2.0.
 
 Higher values increase the frequency jump between octaves, producing coarser detail at higher levels.
 
+### Use OpenCL (GPU)
+
+When `pyopencl` is installed and an OpenCL-compatible GPU is available, a checkbox appears below Lacunarity.
+
+- **Enabled:** Uses `generate_volumetric_gpu.py` for GPU-accelerated generation
+- **Disabled:** Uses the CPU backend (`generate_volumetric.py`)
+- **Output is 100% identical** regardless of which backend is used
+- Requires starting a new Preview/Render after toggling (no live switch)
+
+**Installation:** `pip install pyopencl` (requires OpenCL runtime on the system)
+
 ### Output
 
 File path for the saved PNG.
@@ -97,3 +108,18 @@ Generation runs in a background thread. The UI remains responsive during generat
 - Requires a display server (won't work in headless environments)
 - Large sizes (256³) may be slow and consume significant memory
 - GUI uses Tkinter (may have rendering artifacts on some systems)
+
+## OpenCL GPU Backend
+
+The GPU backend (`generate_volumetric_gpu.py`) provides optional OpenCL-accelerated generation.
+
+**How it works:**
+- Three specialized OpenCL kernels (one per noise type) replace the CPU loops
+- Tables are merged into contiguous GPU arrays; one thread per voxel
+- Falls back to CPU automatically if OpenCL is unavailable or fails
+- Output is bitwise identical to CPU (8-bit quantization matches 100%)
+
+**Performance:**
+- For small volumes (4³–64³), CPU and GPU have similar runtime (overhead dominates)
+- Larger volumes (>128³) benefit more from GPU acceleration
+- Requires `pip install pyopencl` and an OpenCL-compatible GPU

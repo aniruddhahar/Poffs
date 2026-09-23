@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """
 Volumetric 3D Texture Generator - GUI
-Generates LxLxL volumetric textures as greyscale PNG grids.
 
-Imports generation logic from generate_volumetric.py.
+A thin Tkinter wrapper around generate_volumetric.py. All noise algorithms,
+volume generation, grid layout, PNG writing, and upscaling are implemented
+in generate_volumetric.py and imported here.
+
+This GUI adds only:
+- Tkinter UI controls (size, noise type, parameters, output path)
+- Threading with cancel support
+- Live preview rendering and file completion dialogs
 """
 
 import tkinter as tk
@@ -12,7 +18,7 @@ import math
 import threading
 from pathlib import Path
 
-# Import all generation logic from the CLI module
+# This GUI is a thin wrapper — all generation logic is imported from the CLI module.
 from generate_volumetric import (
     _generate_volume,
     compute_grid_dims,
@@ -20,6 +26,12 @@ from generate_volumetric import (
     upscale_grid,
     write_png,
 )
+
+try:
+    from generate_volumetric_gpu import generate_volume_gpu as _generate_volume_gpu, OPENCL_AVAILABLE as _OPENCL_AVAILABLE
+except ImportError:
+    _generate_volume_gpu = None
+    _OPENCL_AVAILABLE = False
 
 # Valid cube dimensions where output texture is always Power of Two.
 # For cube size L, grid is sqrt(L) x sqrt(L), output = L * sqrt(L).
@@ -47,6 +59,7 @@ class App:
         self.octaves_var = tk.IntVar(value=4)
         self.lacunarity_var = tk.DoubleVar(value=2.0)
         self.progress = tk.DoubleVar(value=0.0)
+        self.use_opencl = tk.BooleanVar(value=_OPENCL_AVAILABLE)
         self.generating = False
         self._cancel_event = threading.Event()
         self.preview_image = tk.PhotoImage(width=256, height=256)
@@ -98,6 +111,12 @@ class App:
         ttk.Scale(lac_frame, from_=0.0, to=2.0,
                   variable=self.lacunarity_var, orient=tk.HORIZONTAL).pack(fill=tk.X, expand=True)
         ttk.Label(lac_frame, textvariable=self.lacunarity_var, width=6).pack(side=tk.LEFT, padx=(6, 0))
+
+        # OpenCL Toggle
+        if _OPENCL_AVAILABLE:
+            ttk.Checkbutton(ctrl_frame, text="Use OpenCL (GPU)", variable=self.use_opencl).pack(anchor=tk.W, pady=(8, 0))
+        else:
+            ttk.Label(ctrl_frame, text="OpenCL: not available", foreground="gray").pack(anchor=tk.W, pady=(8, 0))
 
         # Output Path
         ttk.Label(ctrl_frame, text="Output:").pack(anchor=tk.W, pady=(8, 2))
@@ -159,6 +178,12 @@ class App:
             data.append("{" + " ".join(row_strs) + "}")
         self.preview_image.put(" ".join(data))
 
+    def _get_volume_generator(self):
+        """Return the appropriate volume generation function based on OpenCL setting."""
+        if self.use_opencl.get() and _generate_volume_gpu is not None:
+            return _generate_volume_gpu
+        return _generate_volume
+
     def _preview(self):
         if self.generating:
             return
@@ -176,8 +201,9 @@ class App:
                 lacunarity = self.lacunarity_var.get()
                 noise_type = self.noise_type_var.get()
 
+                gen = self._get_volume_generator()
                 self.root.after(0, self._update_status, "Computing volume...", 20)
-                volume = _generate_volume(
+                volume = gen(
                     size, octaves, base_freq, lacunarity,
                     seed, noise_type, self._cancel_event
                 )
@@ -219,8 +245,9 @@ class App:
                 output = self.output_path.get()
                 noise_type = self.noise_type_var.get()
 
+                gen = self._get_volume_generator()
                 self.root.after(0, self._update_status, "Computing volume...", 10)
-                volume = _generate_volume(
+                volume = gen(
                     size, octaves, base_freq, lacunarity,
                     seed, noise_type, self._cancel_event
                 )

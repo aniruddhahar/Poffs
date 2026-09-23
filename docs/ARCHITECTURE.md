@@ -38,16 +38,40 @@ The main module containing all generation logic and the CLI entry point.
 8. **Upscaling** (lines 448–461) — Neighbor-free pixel scaling for preview
 9. **CLI Entry Point** (lines 464–510) — argparse-based argument handling
 
-### `generate_volumetric_gui.py` (283 lines)
+### `generate_volumetric_gui.py` (300+ lines)
 
-Tkinter-based GUI that imports generation logic from `generate_volumetric.py`.
+A **thin wrapper** around `generate_volumetric.py`. Contains zero noise algorithms or generation logic — all of that is imported from the CLI module. The GUI adds only:
+- Tkinter controls (dropdowns, sliders, entries, buttons)
+- Threading with cancel support via `threading.Event`
+- Live preview rendering and file completion dialogs
+- Progress bar and status updates
+- Optional OpenCL GPU acceleration toggle
 
 **Sections:**
-1. **Constants** (lines 24–29) — Valid sizes, noise types, preview size
-2. **App class** (lines 36–273) — Main GUI application
-3. **UI Builder** (lines 56–129) — Control panel and preview area layout
-4. **Generation Workers** (lines 162–245) — Threaded preview and render
-5. **Callbacks** (lines 247–273) — Status updates, completion, error handling
+1. **Constants** (lines 30–35) — Valid sizes, noise types, preview size
+2. **App class** (lines 42–280) — Main GUI application
+3. **UI Builder** (lines 62–143) — Control panel and preview area layout
+4. **Generation Workers** (lines 181–271) — Threaded preview and render
+5. **Callbacks** (lines 273–300) — Status updates, completion, error handling
+
+### `generate_volumetric_gpu.py` (OpenCL Backend)
+
+Optional GPU acceleration via OpenCL. Provides identical results to the CPU backend with three specialized kernels (one per noise type). Falls back to CPU if OpenCL is unavailable or fails.
+
+**Kernels:**
+- `generate_value` — Value noise with precomputed hash tables
+- `generate_worley` — Worley/cellular noise with 3×3×3 neighbor search
+- `generate_perlin` — FBM Perlin noise with gradient dot products
+
+**Data layout:**
+- Octave tables are merged into single contiguous GPU arrays
+- Metadata (periods, p2s, offsets) passed as `constant int*`
+- One thread per voxel, launched as 3D grid
+
+**Integration:**
+- Imported by GUI as optional backend
+- Selected via "Use OpenCL (GPU)" checkbox
+- Automatic CPU fallback on any error
 
 ## Key Constants
 
