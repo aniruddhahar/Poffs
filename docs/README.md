@@ -6,7 +6,7 @@ A Python tool that generates L×L×L volumetric 3D textures and exports them as 
 
 **Key characteristics:**
 - Zero external dependencies (Python standard library only); optional `pyopencl` for GPU acceleration
-- Three noise algorithms: Value Noise, Worley (Cellular), and FBM Perlin Noise
+- Four noise algorithms: Value Noise, Worley (Cellular), FBM Perlin Noise, and Voronoi (5 output modes)
 - GPU acceleration via OpenCL (100% identical output to CPU; auto-fallback if unavailable)
 - Seamless 3D tiling enabled by default (modulo-based wrapping)
 - Command-line and GUI entry points
@@ -44,5 +44,5 @@ docs/                         # Documentation
 
 - [CLI Reference](CLI.md) — Command-line arguments, usage examples
 - [GUI Guide](GUI.md) — Controls, workflow, features
-- [Noise Algorithms](NOISE_ALGORITHMS.md) — Technical explanation of value, Worley, and Perlin noise
+- [Noise Algorithms](NOISE_ALGORITHMS.md) — Technical explanation of value, Worley, Perlin, and Voronoi noise
 - [Architecture](ARCHITECTURE.md) — Code structure, data flow, OpenCL GPU backend

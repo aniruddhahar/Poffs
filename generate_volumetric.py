@@ -5,7 +5,7 @@ Volumetric 3D Texture Generator
 Generates LxLxL volumetric textures and exports them as a PNG grid
 where each cell is a vertical (Z-axis) slice of the volume.
 
-Supports three noise types: Value Noise, Worley (Cellular), and FBM Perlin Noise.
+Supports four noise types: Value Noise, Worley (Cellular), FBM Perlin Noise, and Voronoi.
 
 Usage:
     python generate_volumetric.py --size 64 --output texture.png
@@ -257,6 +257,137 @@ def _sample_worley_direct(sx: float, sy: float, sz: float, hash_period: int, see
     return max(0.0, min(1.0, math.sqrt(min_dist) * 2.0))
 
 # ---------------------------------------------------------------------------
+# Voronoi Noise (Cellular)
+# ---------------------------------------------------------------------------
+
+# Voronoi output modes
+VORONOI_MODES = ["F1", "F2", "F1 - F2", "Jitter", "Edge"]
+
+def _voronoi_sample_table(cx: float, cy: float, cz: float, table: list[list[tuple[float, float, float]]],
+                          period: int, mode: str) -> float:
+    """Sample Voronoi noise from precomputed table.
+
+    Modes:
+        F1      - Distance to nearest feature point (same as Worley)
+        F2      - Distance to second nearest feature point
+        F1 - F2 - Difference between first and second nearest
+        Jitter  - Distance from feature point to query point (within nearest cell)
+        Edge    - Normalized edge detection: F1 / (F1 + F2)
+    """
+    ix, iy, iz = int(cx), int(cy), int(cz)
+    f1 = float("inf")
+    f2 = float("inf")
+    closest_feat = (0.0, 0.0, 0.0)
+
+    for dz in range(-1, 2):
+        for dy in range(-1, 2):
+            for dx in range(-1, 2):
+                cx_i = (ix + dx) % period
+                cy_i = (iy + dy) % period
+                cz_i = (iz + dz) % period
+                feat = table[cz_i][cy_i][cx_i]
+                fx = cx - ix - feat[0]
+                fy = cy - iy - feat[1]
+                fz = cz - iz - feat[2]
+                if fx > 0.5:
+                    fx -= 1.0
+                elif fx < -0.5:
+                    fx += 1.0
+                if fy > 0.5:
+                    fy -= 1.0
+                elif fy < -0.5:
+                    fy += 1.0
+                if fz > 0.5:
+                    fz -= 1.0
+                elif fz < -0.5:
+                    fz += 1.0
+
+                dist_sq = fx * fx + fy * fy + fz * fz
+                if dist_sq < f1:
+                    f2 = f1
+                    f1 = dist_sq
+                    closest_feat = (fx, fy, fz)
+                elif dist_sq < f2:
+                    f2 = dist_sq
+
+    f1 = math.sqrt(f1)
+    f2 = math.sqrt(f2)
+
+    if mode == "F1":
+        return max(0.0, min(1.0, f1 * 2.0))
+    elif mode == "F2":
+        return max(0.0, min(1.0, f2 * 2.0))
+    elif mode == "F1 - F2":
+        return max(0.0, min(1.0, abs(f1 - f2) * 2.0))
+    elif mode == "Jitter":
+        return max(0.0, min(1.0, f1 * 2.0))
+    elif mode == "Edge":
+        denom = f1 + f2
+        if denom < 1e-10:
+            return 0.5
+        return max(0.0, min(1.0, (f1 / denom) * 2.0))
+
+    return max(0.0, min(1.0, f1 * 2.0))
+
+def _voronoi_sample_direct(sx: float, sy: float, sz: float, hash_period: int, seed: int, mode: str) -> float:
+    """Sample Voronoi noise without precomputed table (direct hash)."""
+    ix, iy, iz = int(sx), int(sy), int(sz)
+    f1 = float("inf")
+    f2 = float("inf")
+
+    neighbors = {}
+    for dz in range(-1, 2):
+        for dy in range(-1, 2):
+            for dx in range(-1, 2):
+                cx_i = (ix + dx) % hash_period
+                cy_i = (iy + dy) % hash_period
+                cz_i = (iz + dz) % hash_period
+                neighbors[(dx, dy, dz)] = _worley_hash_coord(cx_i, cy_i, cz_i, seed)
+
+    for (dx, dy, dz), feat in neighbors.items():
+        fx = sx - ix - feat[0]
+        fy = sy - iy - feat[1]
+        fz = sz - iz - feat[2]
+        if fx > 0.5:
+            fx -= 1.0
+        elif fx < -0.5:
+            fx += 1.0
+        if fy > 0.5:
+            fy -= 1.0
+        elif fy < -0.5:
+            fy += 1.0
+        if fz > 0.5:
+            fz -= 1.0
+        elif fz < -0.5:
+            fz += 1.0
+
+        dist_sq = fx * fx + fy * fy + fz * fz
+        if dist_sq < f1:
+            f2 = f1
+            f1 = dist_sq
+        elif dist_sq < f2:
+            f2 = dist_sq
+
+    f1 = math.sqrt(f1)
+    f2 = math.sqrt(f2)
+
+    if mode == "F1":
+        return max(0.0, min(1.0, f1 * 2.0))
+    elif mode == "F2":
+        return max(0.0, min(1.0, f2 * 2.0))
+    elif mode == "F1 - F2":
+        return max(0.0, min(1.0, abs(f1 - f2) * 2.0))
+    elif mode == "Jitter":
+        return max(0.0, min(1.0, f1 * 2.0))
+    elif mode == "Edge":
+        denom = f1 + f2
+        if denom < 1e-10:
+            return 0.5
+        return max(0.0, min(1.0, (f1 / denom) * 2.0))
+
+    return max(0.0, min(1.0, f1 * 2.0))
+
+# ---------------------------------------------------------------------------
 # FBM Perlin Noise
 # ---------------------------------------------------------------------------
 
@@ -339,9 +470,14 @@ def _sample_perlin_direct(sx: float, sy: float, sz: float, hash_period: int, see
 MAX_TABLE_PERIOD = 128
 
 def _generate_volume(size: int, octaves: int, base_freq: float,
-                     lacunarity: float, seed: int, noise_type: str,
-                     cancel_event=None) -> list[list[list[float]]]:
-    """Generate LxLxL volume using pre-computed tables for performance."""
+                      lacunarity: float, seed: int, noise_type: str,
+                      cancel_event=None, voronoi_mode: str = "F1") -> list[list[list[float]]]:
+    """Generate LxLxL volume using pre-computed tables for performance.
+
+    Args:
+        voronoi_mode: Only used when noise_type is "Voronoi Noise".
+            One of: "F1", "F2", "F1 - F2", "Jitter", "Edge"
+    """
     octave_tables = []
     for octave_idx in range(octaves):
         octave_freq = base_freq * (lacunarity ** octave_idx)
@@ -352,7 +488,7 @@ def _generate_volume(size: int, octaves: int, base_freq: float,
             octave_tables.append((hash_period, None))
             continue
 
-        if noise_type == "Worley Noise":
+        if noise_type == "Worley Noise" or noise_type == "Voronoi Noise":
             table = _precompute_worley_table(hash_period, seed)
         elif noise_type == "FBM Perlin Noise":
             table = _precompute_perlin_table(hash_period, seed)
@@ -380,7 +516,10 @@ def _generate_volume(size: int, octaves: int, base_freq: float,
 
                     if table is None:
                         # Use direct sampling for capped tables
-                        if noise_type == "Worley Noise":
+                        if noise_type == "Voronoi Noise":
+                            val += amplitude * _voronoi_sample_direct(
+                                coord_x, coord_y, coord_z, hash_period, seed, voronoi_mode)
+                        elif noise_type == "Worley Noise":
                             val += amplitude * _sample_worley_direct(
                                 coord_x, coord_y, coord_z, hash_period, seed)
                         elif noise_type == "FBM Perlin Noise":
@@ -393,7 +532,10 @@ def _generate_volume(size: int, octaves: int, base_freq: float,
                         amplitude *= 0.5
                         continue
 
-                    if noise_type == "Worley Noise":
+                    if noise_type == "Voronoi Noise":
+                        val += amplitude * _voronoi_sample_table(
+                            coord_x, coord_y, coord_z, table, hash_period, voronoi_mode)
+                    elif noise_type == "Worley Noise":
                         val += amplitude * _sample_worley_table(
                             coord_x, coord_y, coord_z, table, hash_period)
                     elif noise_type == "FBM Perlin Noise":
@@ -480,16 +622,20 @@ def main():
                         help="Base noise frequency (default: 0.01)")
     parser.add_argument("--lacunarity", type=float, default=2.0,
                         help="Frequency multiplier between octaves (default: 2.0)")
-    parser.add_argument("--noise-type", type=str, choices=["value", "worley", "perlin"],
+    parser.add_argument("--noise-type", type=str, choices=["value", "worley", "perlin", "voronoi"],
                         default="value", help="Noise algorithm (default: value)")
+    parser.add_argument("--voronoi-mode", type=str, choices=VORONOI_MODES, default="F1",
+                        help="Voronoi output mode (only used with --noise-type voronoi)")
     args = parser.parse_args()
 
     size = args.size
-    noise_type_map = {"value": "Value Noise", "worley": "Worley Noise", "perlin": "FBM Perlin Noise"}
+    noise_type_map = {"value": "Value Noise", "worley": "Worley Noise", "perlin": "FBM Perlin Noise", "voronoi": "Voronoi Noise"}
     noise_type = noise_type_map[args.noise_type]
     
     print(f"Generating {size}x{size}x{size} volumetric texture ...")
     print(f"  Noise type      : {noise_type}")
+    if noise_type == "Voronoi Noise":
+        print(f"  Voronoi mode    : {args.voronoi_mode}")
     print(f"  Octaves         : {args.octaves}")
     print(f"  Base frequency  : {args.base_freq}")
     print(f"  Lacunarity      : {args.lacunarity}")
@@ -497,7 +643,8 @@ def main():
 
     volume = _generate_volume(
         size, octaves=args.octaves, base_freq=args.base_freq,
-        lacunarity=args.lacunarity, seed=args.seed, noise_type=noise_type
+        lacunarity=args.lacunarity, seed=args.seed, noise_type=noise_type,
+        voronoi_mode=args.voronoi_mode
     )
 
     cols, rows = compute_grid_dims(size)

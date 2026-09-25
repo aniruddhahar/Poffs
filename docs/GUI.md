@@ -21,10 +21,23 @@ These sizes are chosen so that `L × √L` is always a power of two, ensuring th
 
 ### Noise Type
 
-Dropdown with three options:
+Dropdown with four options:
 - **Value Noise** — Fast, simple, smooth patterns
 - **Worley Noise** — Cellular, organic, cell-like patterns
 - **FBM Perlin Noise** — Rich, natural multi-octave detail
+- **Voronoi Noise** — Cellular noise with 5 selectable output modes
+
+### Voronoi Mode
+
+When Voronoi Noise is selected, a mode selector appears below the noise type dropdown with these options:
+
+| Mode | Description |
+|------|-------------|
+| **F1** | Distance to nearest feature point (identical to Worley Noise) |
+| **F2** | Distance to second nearest feature point |
+| **F1 - F2** | Difference between first and second nearest — highlights cell boundaries |
+| **Jitter** | Distance from query point to its feature point |
+| **Edge** | Normalized edge detection: F1 / (F1 + F2) |
 
 ### Base Frequency (Base Freq)
 
@@ -114,7 +127,7 @@ Generation runs in a background thread. The UI remains responsive during generat
 The GPU backend (`generate_volumetric_gpu.py`) provides optional OpenCL-accelerated generation.
 
 **How it works:**
-- Three specialized OpenCL kernels (one per noise type) replace the CPU loops
+- Four specialized OpenCL kernels (one per noise type) replace the CPU loops
 - Tables are merged into contiguous GPU arrays; one thread per voxel
 - Falls back to CPU automatically if OpenCL is unavailable or fails
 - Output is bitwise identical to CPU (8-bit quantization matches 100%)

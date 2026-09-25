@@ -33,11 +33,17 @@ except ImportError:
     _generate_volume_gpu = None
     _OPENCL_AVAILABLE = False
 
+# Import Voronoi modes from the main module
+try:
+    from generate_volumetric import VORONOI_MODES
+except ImportError:
+    VORONOI_MODES = ["F1"]
+
 # Valid cube dimensions where output texture is always Power of Two.
 # For cube size L, grid is sqrt(L) x sqrt(L), output = L * sqrt(L).
 VALID_SIZES = [4, 16, 64, 256]
 
-NOISE_TYPES = ["Value Noise", "Worley Noise", "FBM Perlin Noise"]
+NOISE_TYPES = ["Value Noise", "Worley Noise", "FBM Perlin Noise", "Voronoi Noise"]
 DEFAULT_PREVIEW_SIZE = 16
 
 
@@ -84,6 +90,17 @@ class App:
         ttk.Label(ctrl_frame, text="Noise Type:").pack(anchor=tk.W, pady=(4, 2))
         ttk.Combobox(ctrl_frame, textvariable=self.noise_type_var,
                       values=NOISE_TYPES, state="readonly", width=12).pack(fill=tk.X, pady=(0, 8))
+
+        # Trace noise type changes to show/hide Voronoi mode selector
+        self.noise_type_var.trace_add('write', self._on_noise_type_change)
+
+        # Voronoi Mode (shown when Voronoi Noise is selected)
+        self.voronoi_mode_var = tk.StringVar(value="F1")
+        self.voronoi_mode_label = ttk.Label(ctrl_frame, text="Voronoi Mode:")
+        self.voronoi_mode_label.pack_forget()
+        self.voronoi_mode_combo = ttk.Combobox(ctrl_frame, textvariable=self.voronoi_mode_var,
+                                                values=VORONOI_MODES, state="readonly", width=12)
+        self.voronoi_mode_combo.pack_forget()
 
         # Base Frequency
         ttk.Label(ctrl_frame, text="Base Freq:").pack(anchor=tk.W, pady=(4, 2))
@@ -147,6 +164,18 @@ class App:
         self.preview_label = ttk.Label(preview_frame, image=self.preview_image, relief=tk.SUNKEN)
         self.preview_label.pack(fill=tk.BOTH, expand=True)
 
+        # Initialize Voronoi mode selector visibility based on initial noise type
+        self._on_noise_type_change()
+
+    def _on_noise_type_change(self, *args):
+        """Show/hide Voronoi mode selector based on noise type."""
+        if self.noise_type_var.get() == "Voronoi Noise":
+            self.voronoi_mode_label.pack(anchor=tk.W, pady=(4, 2))
+            self.voronoi_mode_combo.pack(fill=tk.X, pady=(0, 8))
+        else:
+            self.voronoi_mode_label.pack_forget()
+            self.voronoi_mode_combo.pack_forget()
+
     def _browse_output(self):
         path = filedialog.asksaveasfilename(
             defaultextension=".png",
@@ -200,12 +229,13 @@ class App:
                 base_freq = self.base_freq_var.get()
                 lacunarity = self.lacunarity_var.get()
                 noise_type = self.noise_type_var.get()
+                voronoi_mode = self.voronoi_mode_var.get() if noise_type == "Voronoi Noise" else "F1"
 
                 gen = self._get_volume_generator()
                 self.root.after(0, self._update_status, "Computing volume...", 20)
                 volume = gen(
                     size, octaves, base_freq, lacunarity,
-                    seed, noise_type, self._cancel_event
+                    seed, noise_type, self._cancel_event, voronoi_mode
                 )
                 if self._cancel_event.is_set():
                     self.root.after(0, self._generation_cancelled)
@@ -244,12 +274,13 @@ class App:
                 lacunarity = self.lacunarity_var.get()
                 output = self.output_path.get()
                 noise_type = self.noise_type_var.get()
+                voronoi_mode = self.voronoi_mode_var.get() if noise_type == "Voronoi Noise" else "F1"
 
                 gen = self._get_volume_generator()
                 self.root.after(0, self._update_status, "Computing volume...", 10)
                 volume = gen(
                     size, octaves, base_freq, lacunarity,
-                    seed, noise_type, self._cancel_event
+                    seed, noise_type, self._cancel_event, voronoi_mode
                 )
                 if self._cancel_event.is_set():
                     self.root.after(0, self._generation_cancelled)

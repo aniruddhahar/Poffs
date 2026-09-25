@@ -200,6 +200,76 @@ kernel void generate_perlin(
 }
 """
 
+_KERNEL_VORONOI = r"""
+/* Voronoi noise kernel */
+kernel void generate_voronoi(
+    int size, int octaves, int seed, int voronoi_mode,
+    constant int* periods, constant int* p2s, constant int* offsets,
+    constant float* tx, constant float* ty, constant float* tz,
+    __global float* output
+) {
+    int x = get_global_id(0);
+    int y = get_global_id(1);
+    int z = get_global_id(2);
+    if (x >= size || y >= size || z >= size) return;
+
+    int idx = z * size * size + y * size + x;
+    float val = 0.0f, amp = 1.0f, max_v = 0.0f;
+
+    for (int o = 0; o < octaves; o++) {
+        int period = periods[o];
+        int offset = offsets[o];
+        int p2 = p2s[o];
+        float cx = (float)x / (float)size * (float)period;
+        float cy = (float)y / (float)size * (float)period;
+        float cz = (float)z / (float)size * (float)period;
+
+        int ix = (int)cx, iy = (int)cy, iz = (int)cz;
+        float f1 = 1e30f, f2 = 1e30f;
+
+        for (int dz = -1; dz <= 1; dz++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    int ci = ((ix+dx) % period + period) % period;
+                    int cj = ((iy+dy) % period + period) % period;
+                    int ck = ((iz+dz) % period + period) % period;
+                    int ti = offset + ck*p2 + cj*period + ci;
+
+                    float fx = cx - (float)ix - tx[ti];
+                    float fy = cy - (float)iy - ty[ti];
+                    float fz = cz - (float)iz - tz[ti];
+                    if (fx > 0.5f) fx -= 1.0f; else if (fx < -0.5f) fx += 1.0f;
+                    if (fy > 0.5f) fy -= 1.0f; else if (fy < -0.5f) fy += 1.0f;
+                    if (fz > 0.5f) fz -= 1.0f; else if (fz < -0.5f) fz += 1.0f;
+
+                    float d = fx*fx + fy*fy + fz*fz;
+                    if (d < f1) { f2 = f1; f1 = d; }
+                    else if (d < f2) { f2 = d; }
+                }
+            }
+        }
+
+        float s1 = sqrtf(f1);
+        float s2 = sqrtf(f2);
+        float sample = 0.0f;
+
+        if (voronoi_mode == 0) sample = s1 * 2.0f;
+        else if (voronoi_mode == 1) sample = s2 * 2.0f;
+        else if (voronoi_mode == 2) sample = fabsf(s1 - s2) * 2.0f;
+        else if (voronoi_mode == 3) sample = s1 * 2.0f;
+        else if (voronoi_mode == 4) {
+            float denom = s1 + s2;
+            sample = (denom < 1e-10f) ? 0.5f : (s1 / denom) * 2.0f;
+        }
+
+        if (sample > 1.0f) sample = 1.0f;
+        if (sample < 0.0f) sample = 0.0f;
+        val += amp * sample; max_v += amp; amp *= 0.5f;
+    }
+    output[idx] = val / max_v;
+}
+"""
+
 
 # ---------------------------------------------------------------------------
 # OpenCL Context Manager
@@ -421,33 +491,26 @@ def generate_volume_gpu(
     seed: int,
     noise_type: str,
     cancel_event=None,
+    voronoi_mode: str = "F1",
 ) -> list[list[list[float]]]:
     """Generate L×L×L volume using OpenCL GPU, falling back to CPU if needed.
 
     Args:
-        size: Cube dimension L
-        octaves: Number of FBM octaves
-        base_freq: Base noise frequency
-        lacunarity: Frequency multiplier between octaves
-        seed: Random seed
-        noise_type: "Value Noise", "Worley Noise", or "FBM Perlin Noise"
-        cancel_event: Optional threading.Event for cancellation
-
-    Returns:
-        Volume as list[z][y][x] of float values in [0, 1]
+        voronoi_mode: Only used when noise_type is "Voronoi Noise".
+            One of: "F1", "F2", "F1 - F2", "Jitter", "Edge"
     """
     if not OPENCL_AVAILABLE or not _get_mgr().is_ready():
-        return _generate_volume_cpu(size, octaves, base_freq, lacunarity, seed, noise_type, cancel_event)
+        return _generate_volume_cpu(size, octaves, base_freq, lacunarity, seed, noise_type, cancel_event, voronoi_mode)
 
     try:
-        return _generate_volume_opencl(size, octaves, base_freq, lacunarity, seed, noise_type, cancel_event)
+        return _generate_volume_opencl(size, octaves, base_freq, lacunarity, seed, noise_type, cancel_event, voronoi_mode)
     except Exception:
-        return _generate_volume_cpu(size, octaves, base_freq, lacunarity, seed, noise_type, cancel_event)
+        return _generate_volume_cpu(size, octaves, base_freq, lacunarity, seed, noise_type, cancel_event, voronoi_mode)
 
 
 def _generate_volume_opencl(
     size: int, octaves: int, base_freq: float, lacunarity: float,
-    seed: int, noise_type: str, cancel_event=None,
+    seed: int, noise_type: str, cancel_event=None, voronoi_mode: str = "F1",
 ) -> list[list[list[float]]]:
     """Run volume generation on GPU via OpenCL."""
     import numpy as np
@@ -464,10 +527,10 @@ def _generate_volume_opencl(
             octaves_info.append((hash_period, None))
             continue
 
-        if noise_type == "Value Noise":
-            table = _precompute_value_table(hash_period, seed)
-        elif noise_type == "Worley Noise":
+        if noise_type in ("Worley Noise", "Voronoi Noise"):
             table = _precompute_worley_table(hash_period, seed)
+        elif noise_type == "Value Noise":
+            table = _precompute_value_table(hash_period, seed)
         else:
             table = _precompute_perlin_table(hash_period, seed)
         octaves_info.append((hash_period, table))
@@ -478,10 +541,15 @@ def _generate_volume_opencl(
     total_voxels = size * size * size
     output_buf = cl.Buffer(mgr.ctx, cl.mem_flags.WRITE_ONLY, total_voxels * 4)
 
+    # Map voronoi mode to integer
+    voronoi_mode_map = {"F1": 0, "F2": 1, "F1 - F2": 2, "Jitter": 3, "Edge": 4}
+    vm = voronoi_mode_map.get(voronoi_mode, 0)
+
     kernel = mgr.get_kernel(noise_type, {
         "Value Noise": _KERNEL_VALUE,
         "Worley Noise": _KERNEL_WORLEY,
         "FBM Perlin Noise": _KERNEL_PERLIN,
+        "Voronoi Noise": _KERNEL_VORONOI,
     }[noise_type])
 
     if kernel is None:
@@ -509,6 +577,12 @@ def _generate_volume_opencl(
             np.int32(size), np.int32(octaves), np.int32(seed),
             periods_arr, p2s_arr, offsets_arr,
             tv, twy, twz, output_buf,
+        )
+    elif noise_type == "Voronoi Noise":
+        kernel.set_args(
+            np.int32(size), np.int32(octaves), np.int32(seed), np.int32(vm),
+            periods_arr, p2s_arr, offsets_arr,
+            twx, twy, twz, output_buf,
         )
 
     # Launch
@@ -755,7 +829,91 @@ def _sample_perlin_direct(sx, sy, sz, hash_period, seed):
     return _lerp(nx0, nx1, dz)
 
 
-def _generate_volume_cpu(size, octaves, base_freq, lacunarity, seed, noise_type, cancel_event=None):
+def _sample_voronoi_table(cx, cy, cz, table, period, mode):
+    """Voronoi sampling from table — returns f1, f2, then computes mode output."""
+    from generate_volumetric import math
+    ix, iy, iz = int(cx), int(cy), int(cz)
+    f1 = float("inf")
+    f2 = float("inf")
+    tx, ty, tz = table
+    for dz in range(-1, 2):
+        for dy in range(-1, 2):
+            for dx in range(-1, 2):
+                ci = (ix + dx) % period
+                cj = (iy + dy) % period
+                ck = (iz + dz) % period
+                fx = cx - ix - tx[ck][cj][ci]
+                fy = cy - iy - ty[ck][cj][ci]
+                fz = cz - iz - tz[ck][cj][ci]
+                if fx > 0.5: fx -= 1.0
+                elif fx < -0.5: fx += 1.0
+                if fy > 0.5: fy -= 1.0
+                elif fy < -0.5: fy += 1.0
+                if fz > 0.5: fz -= 1.0
+                elif fz < -0.5: fz += 1.0
+                dist_sq = fx*fx + fy*fy + fz*fz
+                if dist_sq < f1:
+                    f2 = f1
+                    f1 = dist_sq
+                elif dist_sq < f2:
+                    f2 = dist_sq
+    f1 = math.sqrt(f1)
+    f2 = math.sqrt(f2)
+    if mode == "F1": return max(0.0, min(1.0, f1 * 2.0))
+    elif mode == "F2": return max(0.0, min(1.0, f2 * 2.0))
+    elif mode == "F1 - F2": return max(0.0, min(1.0, abs(f1 - f2) * 2.0))
+    elif mode == "Jitter": return max(0.0, min(1.0, f1 * 2.0))
+    elif mode == "Edge":
+        denom = f1 + f2
+        if denom < 1e-10: return 0.5
+        return max(0.0, min(1.0, (f1 / denom) * 2.0))
+    return max(0.0, min(1.0, f1 * 2.0))
+
+
+def _sample_voronoi_direct(sx, sy, sz, hash_period, seed, mode):
+    """Voronoi direct sampling — no table."""
+    from generate_volumetric import _worley_hash_coord, math
+    ix, iy, iz = int(sx), int(sy), int(sz)
+    f1 = float("inf")
+    f2 = float("inf")
+    neighbors = {}
+    for dz in range(-1, 2):
+        for dy in range(-1, 2):
+            for dx in range(-1, 2):
+                cx_i = (ix + dx) % hash_period
+                cy_i = (iy + dy) % hash_period
+                cz_i = (iz + dz) % hash_period
+                neighbors[(dx, dy, dz)] = _worley_hash_coord(cx_i, cy_i, cz_i, seed)
+    for feat in neighbors.values():
+        fx = sx - ix - feat[0]
+        fy = sy - iy - feat[1]
+        fz = sz - iz - feat[2]
+        if fx > 0.5: fx -= 1.0
+        elif fx < -0.5: fx += 1.0
+        if fy > 0.5: fy -= 1.0
+        elif fy < -0.5: fy += 1.0
+        if fz > 0.5: fz -= 1.0
+        elif fz < -0.5: fz += 1.0
+        dist_sq = fx*fx + fy*fy + fz*fz
+        if dist_sq < f1:
+            f2 = f1
+            f1 = dist_sq
+        elif dist_sq < f2:
+            f2 = dist_sq
+    f1 = math.sqrt(f1)
+    f2 = math.sqrt(f2)
+    if mode == "F1": return max(0.0, min(1.0, f1 * 2.0))
+    elif mode == "F2": return max(0.0, min(1.0, f2 * 2.0))
+    elif mode == "F1 - F2": return max(0.0, min(1.0, abs(f1 - f2) * 2.0))
+    elif mode == "Jitter": return max(0.0, min(1.0, f1 * 2.0))
+    elif mode == "Edge":
+        denom = f1 + f2
+        if denom < 1e-10: return 0.5
+        return max(0.0, min(1.0, (f1 / denom) * 2.0))
+    return max(0.0, min(1.0, f1 * 2.0))
+
+
+def _generate_volume_cpu(size, octaves, base_freq, lacunarity, seed, noise_type, cancel_event=None, voronoi_mode: str = "F1"):
     """CPU fallback — identical logic to generate_volumetric.py _generate_volume()."""
     octave_tables = []
     for octave_idx in range(octaves):
@@ -764,12 +922,12 @@ def _generate_volume_cpu(size, octaves, base_freq, lacunarity, seed, noise_type,
         if hash_period > 128:
             octave_tables.append((hash_period, None))
             continue
-        if noise_type == "Worley Noise":
+        if noise_type in ("Worley Noise", "Voronoi Noise"):
             table = _precompute_worley_table(hash_period, seed)
-        elif noise_type == "FBM Perlin Noise":
-            table = _precompute_perlin_table(hash_period, seed)
-        else:
+        elif noise_type == "Value Noise":
             table = _precompute_value_table(hash_period, seed)
+        else:
+            table = _precompute_perlin_table(hash_period, seed)
         octave_tables.append((hash_period, table))
 
     volume = [[[0.0] * size for _ in range(size)] for _ in range(size)]
@@ -789,7 +947,9 @@ def _generate_volume_cpu(size, octaves, base_freq, lacunarity, seed, noise_type,
                     coord_y = (y / size) * hash_period
                     coord_z = (z / size) * hash_period
                     if table is None:
-                        if noise_type == "Worley Noise":
+                        if noise_type == "Voronoi Noise":
+                            val += amplitude * _sample_voronoi_direct(coord_x, coord_y, coord_z, hash_period, seed, voronoi_mode)
+                        elif noise_type == "Worley Noise":
                             val += amplitude * _sample_worley_direct(coord_x, coord_y, coord_z, hash_period, seed)
                         elif noise_type == "FBM Perlin Noise":
                             val += amplitude * _sample_perlin_direct(coord_x, coord_y, coord_z, hash_period, seed)
@@ -798,7 +958,9 @@ def _generate_volume_cpu(size, octaves, base_freq, lacunarity, seed, noise_type,
                         max_val += amplitude
                         amplitude *= 0.5
                         continue
-                    if noise_type == "Worley Noise":
+                    if noise_type == "Voronoi Noise":
+                        val += amplitude * _sample_voronoi_table(coord_x, coord_y, coord_z, table, hash_period, voronoi_mode)
+                    elif noise_type == "Worley Noise":
                         val += amplitude * _sample_worley_table(coord_x, coord_y, coord_z, table, hash_period)
                     elif noise_type == "FBM Perlin Noise":
                         val += amplitude * _sample_perlin_table(coord_x, coord_y, coord_z, table, hash_period)

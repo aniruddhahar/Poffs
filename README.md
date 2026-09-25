@@ -9,7 +9,7 @@ A tool for generating volumetric 3D textures as greyscale PNG image grids. Each 
 ## Features
 
 - **Zero dependencies** — Python standard library only (3.10+); optional `pyopencl` for GPU acceleration
-- **Three noise algorithms** — Value Noise, Worley (Cellular), and FBM Perlin Noise
+- **Four noise algorithms** — Value Noise, Worley (Cellular), FBM Perlin Noise, and Voronoi (5 output modes)
 - **GPU acceleration** — Optional OpenCL backend with 100% identical output (install `pyopencl` to enable)
 - **Command-line interface** — Batch generation and scripting support
 - **Interactive GUI** — Live preview, multiple noise types, parameter controls, and OpenCL toggle
@@ -25,6 +25,7 @@ A tool for generating volumetric 3D textures as greyscale PNG image grids. Each 
 | **Value Noise** | Smooth interpolation of random values at grid points. Fast and simple. |
 | **Worley Noise** | Cellular noise based on distance to nearest feature point. Produces organic, cell-like patterns. |
 | **FBM Perlin Noise** | Fractal Brownian Motion with gradient-based Perlin noise. Rich, natural-looking detail across multiple octaves. |
+| **Voronoi Noise** | Cellular noise with 5 output modes: `F1` (nearest distance), `F2` (second nearest), `F1 - F2` (edge highlight), `Jitter` (feature distance), `Edge` (normalized edge detection) |
 
 ## Installation
 
@@ -65,7 +66,8 @@ python generate_volumetric.py --size 128 --seed 123 --octaves 6 --base-freq 0.5 
 | `--seed` | int | 42 | Random seed for reproducibility |
 | `--base-freq` | float | 0.01 | Base noise frequency |
 | `--lacunarity` | float | 2.0 | Frequency multiplier between octaves |
-| `--noise-type` | str | `value` | Noise algorithm: `value`, `worley`, or `perlin` |
+| `--noise-type` | str | `value` | Noise algorithm: `value`, `worley`, `perlin`, or `voronoi` |
+| `--voronoi-mode` | str | `F1` | Voronoi output mode (only with `--noise-type voronoi`): `F1`, `F2`, `F1 - F2`, `Jitter`, `Edge` |
 
 ### GUI
 
@@ -80,7 +82,8 @@ python generate_volumetric_gui.py
 | Control | Description |
 |---------|-------------|
 | **Reference Size (L)** | Cube dimension. Options: 4, 16, 64, 256. Output dimensions are always a power of two (`L × √L`). |
-| **Noise Type** | Select between Value Noise, Worley Noise, and FBM Perlin Noise. |
+| **Noise Type** | Select between Value Noise, Worley Noise, FBM Perlin Noise, and Voronoi Noise. |
+| **Voronoi Mode** | When Voronoi Noise is selected, choose output mode: F1, F2, F1-F2, Jitter, or Edge. |
 | **Base Freq** | Base frequency for the noise (0–100). |
 | **Seed** | Random seed for reproducible results. Use the **Randomize** button for a new random seed. |
 | **Octaves** | Number of FBM octaves (detail levels). |

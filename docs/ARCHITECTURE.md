@@ -23,7 +23,7 @@ write_png()                     ← Minimal PNG writer (zlib + struct)
 
 ## Module Structure
 
-### `generate_volumetric.py` (512 lines)
+### `generate_volumetric.py` (659 lines)
 
 The main module containing all generation logic and the CLI entry point.
 
@@ -32,13 +32,14 @@ The main module containing all generation logic and the CLI entry point.
 2. **Noise Primitives** (lines 61–103) — Hash, lerp, smoothstep, Worley hash, Perlin gradient
 3. **Value Noise** (lines 106–171) — Direct and table-based sampling
 4. **Worley Noise** (lines 174–257) — Cellular noise with feature points
-5. **Perlin Noise** (lines 260–331) — Gradient-based noise with dot products
-6. **Volume Generation** (lines 334–409) — FBM loop with table pre-computation
-7. **Grid Layout** (lines 312–445) — Dimension calculation and slice arrangement
-8. **Upscaling** (lines 448–461) — Neighbor-free pixel scaling for preview
-9. **CLI Entry Point** (lines 464–510) — argparse-based argument handling
+5. **Voronoi Noise** (lines 260–388) — Cellular noise with 5 output modes
+6. **FBM Perlin Noise** (lines 391–462) — Gradient-based noise with dot products
+7. **Volume Generation** (lines 465–551) — FBM loop with table pre-computation
+8. **Grid Layout** (lines 554–587) — Dimension calculation and slice arrangement
+9. **Upscaling** (lines 590–603) — Neighbor-free pixel scaling for preview
+10. **CLI Entry Point** (lines 606–659) — argparse-based argument handling
 
-### `generate_volumetric_gui.py` (300+ lines)
+### `generate_volumetric_gui.py` (341 lines)
 
 A **thin wrapper** around `generate_volumetric.py`. Contains zero noise algorithms or generation logic — all of that is imported from the CLI module. The GUI adds only:
 - Tkinter controls (dropdowns, sliders, entries, buttons)
@@ -48,25 +49,31 @@ A **thin wrapper** around `generate_volumetric.py`. Contains zero noise algorith
 - Optional OpenCL GPU acceleration toggle
 
 **Sections:**
-1. **Constants** (lines 30–35) — Valid sizes, noise types, preview size
-2. **App class** (lines 42–280) — Main GUI application
-3. **UI Builder** (lines 62–143) — Control panel and preview area layout
-4. **Generation Workers** (lines 181–271) — Threaded preview and render
-5. **Callbacks** (lines 273–300) — Status updates, completion, error handling
+1. **Constants** (lines 44–47) — Valid sizes, noise types, preview size
+2. **App class** (lines 54–331) — Main GUI application
+3. **UI Builder** (lines 75–168) — Control panel and preview area layout
+4. **Generation Workers** (lines 216–303) — Threaded preview and render
+5. **Callbacks** (lines 305–331) — Status updates, completion, error handling
 
-### `generate_volumetric_gpu.py` (OpenCL Backend)
+### `generate_volumetric_gpu.py` (972 lines, OpenCL Backend)
 
-Optional GPU acceleration via OpenCL. Provides identical results to the CPU backend with three specialized kernels (one per noise type). Falls back to CPU if OpenCL is unavailable or fails.
+Optional GPU acceleration via OpenCL. Provides identical results to the CPU backend with four specialized kernels (one per noise type). Falls back to CPU if OpenCL is unavailable or fails.
 
 **Kernels:**
 - `generate_value` — Value noise with precomputed hash tables
 - `generate_worley` — Worley/cellular noise with 3×3×3 neighbor search
 - `generate_perlin` — FBM Perlin noise with gradient dot products
+- `generate_voronoi` — Voronoi cellular noise with 5 output modes
 
 **Data layout:**
 - Octave tables are merged into single contiguous GPU arrays
 - Metadata (periods, p2s, offsets) passed as `constant int*`
 - One thread per voxel, launched as 3D grid
+
+**CPU fallback:**
+- Contains duplicate noise sampling functions that mirror `generate_volumetric.py`
+- These are used when OpenCL is unavailable or fails
+- Imports hash/gradient primitives from `generate_volumetric.py` via `from generate_volumetric import ...`
 
 **Integration:**
 - Imported by GUI as optional backend
@@ -77,11 +84,12 @@ Optional GPU acceleration via OpenCL. Provides identical results to the CPU back
 
 | Constant | Value | Location | Description |
 |----------|-------|----------|-------------|
-| `MAX_TABLE_PERIOD` | 128 | `generate_volumetric.py:339` | Max pre-computed table dimension |
-| `VALID_SIZES` | `[4, 16, 64, 256]` | `generate_volumetric_gui.py:26` | GUI dropdown options |
-| `DEFAULT_PREVIEW_SIZE` | 16 | `generate_volumetric_gui.py:29` | Fixed size for preview generation |
-| `NOISE_TYPES` | 3 types | `generate_volumetric_gui.py:28` | GUI noise type options |
-| `DEFAULT_PREVIEW_SIZE` | 16 | `generate_volumetric_gui.py:29` | Fixed preview volume size |
+| `MAX_TABLE_PERIOD` | 128 | `generate_volumetric.py:470` | Max pre-computed table dimension |
+| `VALID_SIZES` | `[4, 16, 64, 256]` | `generate_volumetric_gui.py:44` | GUI dropdown options |
+| `DEFAULT_PREVIEW_SIZE` | 16 | `generate_volumetric_gui.py:47` | Fixed size for preview generation |
+| `NOISE_TYPES` | 4 types | `generate_volumetric_gui.py:46` | GUI noise type options |
+| `VORONOI_MODES` | 5 modes | `generate_volumetric.py:264` | Voronoi output mode options |
+| `OPENCL_AVAILABLE` | bool | `generate_volumetric_gpu.py:17` | Whether pyopencl + GPU detected |
 
 ## Data Flow
 
