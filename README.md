@@ -171,4 +171,6 @@ No test framework required — run the smoke/verification suite with:
 GUI_PY=python3.12 GPU_PY=python3 ./tests/run_all.sh
 ```
 
-It runs CLI smokes + validation, cellular tiling checks (`tests/cellular_check.py` — continuity across cell boundaries and seamless wrapping), GPU↔CPU bit-exact equivalence (`tests/gpu_equiv.py`, skipped without `pyopencl`), and a GUI end-to-end check (`tests/gui_smoke.py`, skipped without a display).
+It runs CLI smokes + validation, cellular tiling checks (`tests/cellular_check.py` — continuity across cell boundaries and seamless wrapping), GPU↔CPU bit-exact equivalence (`tests/gpu_equiv.py`, skipped without `pyopencl`), and a GUI end-to-end check (`tests/gui_smoke.py`, skipped without a display; set `GUI_PY` to an interpreter that has `tkinter`).
+
+**Note:** `volumetric_texture.png` is the tracked README sample — the GUI/CLI defaults write to it when run from the repo root. Generate with `-o <other path>` to avoid churn; restore with `git checkout -- volumetric_texture.png`.

@@ -158,9 +158,11 @@ Identical periodic wrapping to Worley noise: neighbour cell indices are wrapped 
 - **Edge:** Clean boundary outlines — useful for cell segmentation visualization, honeycomb patterns, or structural grids
 
 ### Implementation
-Both in `generate_volumetric.py`:
+All in `generate_volumetric.py`:
 - Sample (table): `_voronoi_sample_table()`
 - Sample (direct): `_voronoi_sample_direct()`
+- Jitter containing-cell lookup: `_jitter_distance_table()`
+- Feature-point hash/tables: shared with Worley noise (`_worley_hash_coord()`, `_precompute_worley_table()`)
 
 ---
 

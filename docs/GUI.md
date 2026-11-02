@@ -64,7 +64,7 @@ Higher values increase the frequency jump between octaves, producing coarser det
 
 ### Use OpenCL (GPU)
 
-When `pyopencl` is installed and an OpenCL-compatible GPU is available, a checkbox appears below Lacunarity.
+When `pyopencl` is installed and an OpenCL-compatible GPU is available, a checkbox appears below Lacunarity; otherwise a gray "OpenCL: not available" label appears in its place.
 
 - **Enabled:** Uses `generate_volumetric_gpu.py` for GPU-accelerated generation
 - **Disabled:** Uses the CPU backend (`generate_volumetric.py`)
@@ -106,7 +106,7 @@ Slider names mirror the Unity `SimpleVolumetric` reference (Density, Step Count)
 File path for the saved PNG.
 
 - Type a path directly, or click **Browse...** to open the file picker
-- Default: `volumetric_texture.png` in the current directory
+- Default: `volumetric_texture.png` in the current directory (shown as the resolved absolute path)
 
 ### Buttons
 
@@ -120,12 +120,12 @@ File path for the saved PNG.
 
 ### Presets
 
-Presets are plain JSON files (stdlib `json`, no schema library) capturing: `size`, `noise_type`, `voronoi_mode`, `base_freq`, `seed`, `octaves`, `lacunarity`, `invert`, `use_opencl`, `output`. On load, values are validated: `size`/`noise_type`/`voronoi_mode`/`octaves` must be valid (error dialog otherwise); `base_freq` and `lacunarity` are clamped to their slider ranges; unknown keys are ignored.
+Presets are plain JSON files (stdlib `json`, no schema library) capturing: `size`, `noise_type`, `voronoi_mode`, `base_freq`, `seed`, `octaves`, `lacunarity`, `invert`, `use_opencl`, `output`, plus the metadata keys `app` (identifier) and `version` (format version, currently 1). On load, values are validated: `size`/`noise_type`/`voronoi_mode`/`octaves` must be valid (error dialog otherwise); `base_freq` and `lacunarity` are clamped to their slider ranges; `use_opencl` is applied only when OpenCL is available; unknown keys (including the metadata) are ignored.
 
 ### Progress Bar & Status
 
 - Displays real generation progress, updated once per completed Z-slice on both CPU and GPU paths (volume phase maps to 0–90% for Preview, 0–60% for Render)
-- Shows status text: `Ready`, `Computing volume...`, `Building grid...`, `Writing PNG...`, `Preview ready`, `Rendering 3D...`, `3D preview ready`, `3D render cancelled`, `Done!`, `Cancelled`, `Preset saved/loaded: <name>`, or `Error`
+- Shows status text: `Ready`, `Generating preview...`, `Computing volume...`, `Preview ready`, `Rendering...`, `Building grid...`, `Writing PNG...`, `Done! (L³ → WxH px)`, `Rendering 3D...`, `3D preview ready`, `3D render cancelled`, `Cancelling...`, `Cancelling 3D render...`, `Cancelled`, `Preset saved/loaded: <name>`, `Error`, or `3D render error`
 - All buttons (including preset buttons) are disabled during generation
 
 ## Workflow

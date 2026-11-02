@@ -59,7 +59,7 @@ The main module containing all generation logic and the CLI entry point.
 10. **3D Preview Ray-March** — `volume_to_flat()` (flatten + downsample to ≤ `MAX_RENDER_RES`) and `render_volume_3d()` (orthographic front-to-back march, trilinear wrapped sampling, greyscale emission over black; `cancel_event` between rows). Rendering reads an existing volume; it never modifies the noise path
 11. **CLI Entry Point** — argparse with validation (`--size` ≥ 1, `--octaves` ≥ 1, non-power-of-two output note)
 
-### `generate_volumetric_gui.py` (~890 lines)
+### `generate_volumetric_gui.py` (~910 lines)
 
 A **thin wrapper** around `generate_volumetric.py`. Contains zero noise algorithms or generation logic — all of that is imported from the CLI module (the GPU module is imported optionally). The GUI adds only:
 - Tkinter controls (dropdowns, sliders, entries, buttons, preset save/load)
@@ -77,7 +77,7 @@ A **thin wrapper** around `generate_volumetric.py`. Contains zero noise algorith
 - **Preview caching:** quantized 8-bit slices pre-computed when a volume is cached; upscaled grids cached per (slice, scale) with a FIFO cap (`MAX_UPSCALE_CACHE = 12`); slider (30 ms) and resize (50 ms) callbacks debounced via `after_cancel`.
 - **Presets:** `_current_preset()` / `_apply_preset()` round-trip all parameters through a plain JSON file (`json` stdlib); loaded values are validated or clamped.
 
-### `generate_volumetric_gpu.py` (~725 lines, OpenCL Backend)
+### `generate_volumetric_gpu.py` (~915 lines, OpenCL Backend)
 
 Optional GPU acceleration via OpenCL. Produces **bit-exact** results identical to the CPU backend.
 
@@ -107,7 +107,7 @@ Optional GPU acceleration via OpenCL. Produces **bit-exact** results identical t
 
 - `run.sh` — Linux/macOS launcher: picks a Python ≥ 3.10 (with tkinter for GUI), apt/brew tkinter install, optional `--gpu` pyopencl+numpy install with `.venv` fallback; portable across bash 3.2 (macOS) and bash 4/5
 - `run.cmd` → `run.ps1` — Windows equivalent (uses the `py` launcher then `python`)
-- `tests/run_all.sh` — verification suite: CLI smokes + validation, `tests/cellular_check.py` (cellular field continuity across cell boundaries + seamless wrap for every Voronoi mode, over periods 2–16), `tests/gpu_equiv.py` (64 fallback + 56 GPU bit-exact cases with the fallback sabotaged to prove kernel execution), `tests/gui_smoke.py` (21-check GUI state machine: 15 generation/2D — including that the preview honours the selected Voronoi mode — + 6 3D-preview checks: frame produced, cancel mid-render, control-change re-render, cache bounds)
+- `tests/run_all.sh` — verification suite: CLI smokes + validation, `tests/cellular_check.py` (cellular field continuity across cell boundaries + seamless wrap for every Voronoi mode, over periods {2, 3, 4, 5, 6, 9, 16}), `tests/gpu_equiv.py` (64 fallback + 56 GPU bit-exact cases with the fallback sabotaged to prove kernel execution), `tests/gui_smoke.py` (23-check GUI state machine: 15 generation/2D — including that the preview honours the selected Voronoi mode — + 8 3D-preview checks: frame produced, cancel mid-render, control-change re-render, frame + upscale cache bounds)
 - `SimpleVolumetric.unitypackage` — URP Shader Graph (`SimpleVolumetric.shadergraph` + `raymarchloop.shadersubgraph`) for raymarching the generated volumes in Unity
 
 ## Key Constants
