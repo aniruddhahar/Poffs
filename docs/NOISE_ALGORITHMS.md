@@ -35,10 +35,11 @@ Seamless 3D tiling is achieved by wrapping grid coordinates modulo the hash peri
 - Best for generic texture fills, background noise, or as a base layer in compositing
 
 ### Implementation
-- Hash: `generate_volumetric.py:64`
-- Sample (direct): `generate_volumetric.py:109`
-- Sample (table): `generate_volumetric.py:145`
-- Precompute: `generate_volumetric.py:137`
+All in `generate_volumetric.py`:
+- Hash: `_hash_coord()`
+- Sample (direct): `_sample_value_3d()`
+- Sample (table): `_sample_value_table()`
+- Precompute: `_precompute_value_table()`
 
 ---
 
@@ -50,19 +51,19 @@ Worley noise (also called cellular noise or F1 noise) produces organic, cell-lik
 ### How it works
 1. **Feature point generation:** For each integer grid cell `(nx, ny, nz)`, a deterministic hash produces a pseudo-random 3D vector `(fx, fy, fz)` in `[0, 1]³`. This vector represents the position of a "feature point" inside that grid cell.
 
-2. **Neighborhood search:** For a query point at `(sx, sy, sz)`, the algorithm searches all 27 cells in a 3×3×3 neighborhood (including the containing cell). Each neighbor's feature point is retrieved via hash.
+2. **Neighborhood search:** For a query point at `(sx, sy, sz)`, the algorithm searches the cells in a 3×3×3 neighborhood (including the containing cell) — 5×5×5 when the tiling is only 2 cells wide, which is the smallest window that still covers half a cell diagonal. Each neighbor's feature point is retrieved via hash.
 
-3. **Distance computation:** For each neighbor's feature point, the algorithm computes the offset from the query point to the feature point. The offset is wrapped to `[-0.5, 0.5]` for seamless tiling (if `|offset| > 0.5`, subtract/add 1.0). The squared Euclidean distance `dx² + dy² + dz²` is computed.
+3. **Distance computation:** For each neighbor's feature point, the algorithm computes the offset from the query point to the feature point, measured to that feature's **nearest periodic image of the whole tiling**: the offset is wrapped by the tiling period (if `|offset| > period/2`, subtract/add `period`). Wrapping by a single cell instead would alias a neighbour's feature into the current cell and make the field discontinuous at every cell boundary for any period ≥ 4. The squared Euclidean distance `dx² + dy² + dz²` is computed.
 
-4. **Minimum selection:** The algorithm tracks the minimum distance across all 27 neighbors. This is the distance to the nearest feature point (F1).
+4. **Minimum selection:** The algorithm tracks the minimum distance across all searched neighbors. This is the distance to the nearest feature point (F1).
 
-5. **Normalization:** The square root of the minimum distance is multiplied by 2.0 and clamped to `[0, 1]`. The factor of 2.0 scales the maximum possible distance in a unit cube to approximately 1.0, providing good contrast.
+5. **Normalization:** The square root of the minimum distance is multiplied by `CELLULAR_SCALE` = `2/√3` and clamped to `[0, 1]`. The nearest periodic feature is never farther than half a cell diagonal (`√3/2`), so this maps the full possible range onto `[0, 1]`.
 
 ### Seaming
-Seamless wrapping is achieved by applying modulo operations to the neighbor cell indices. This ensures that the feature point layout wraps around at volume boundaries, producing identical noise values on opposite edges.
+Seamless wrapping needs both halves of the periodic wrap: modulo on the neighbour cell indices (so the feature layout wraps at the volume edges) **and** wrapping each feature offset by the tiling period (so distances are taken to the nearest image of the tiling). Opposite edges then match exactly.
 
 ### Performance
-- Slightly slower than value noise due to the 27-neighbor search (27 hash computations per voxel in direct mode)
+- Slightly slower than value noise due to the neighborhood search (27 hash computations per voxel in direct mode)
 - Table-based mode stores `period³` feature points (triples), which is ~3× more memory than value noise tables
 - Direct mode is used when `hash_period > MAX_TABLE_PERIOD (128)`
 
@@ -72,10 +73,11 @@ Seamless wrapping is achieved by applying modulo operations to the neighbor cell
 - The output is purely based on nearest-neighbor distance — no directional gradients
 
 ### Implementation
-- Feature point hash: `generate_volumetric.py:77`
-- Sample (direct): `generate_volumetric.py:219`
-- Sample (table): `generate_volumetric.py:185`
-- Precompute: `generate_volumetric.py:177`
+All in `generate_volumetric.py`:
+- Feature point hash: `_worley_hash_coord()`
+- Sample (direct): `_sample_worley_direct()`
+- Sample (table): `_sample_worley_table()`
+- Precompute: `_precompute_worley_table()`
 
 ---
 
@@ -109,10 +111,11 @@ Same modulo-based wrapping as value noise. Grid coordinates are wrapped modulo t
 - The sign of Perlin noise (−1 to +1 range) produces both bright and dark features symmetrically
 
 ### Implementation
-- Gradient: `generate_volumetric.py:91`
-- Sample (direct): `generate_volumetric.py:433`
-- Sample (table): `generate_volumetric.py:402`
-- Precompute: `generate_volumetric.py:394`
+All in `generate_volumetric.py`:
+- Gradient: `_perlin_gradient()`
+- Sample (direct): `_sample_perlin_direct()`
+- Sample (table): `_sample_perlin_table()`
+- Precompute: `_precompute_perlin_table()`
 
 ---
 
@@ -124,22 +127,22 @@ Voronoi noise is a cellular noise algorithm closely related to Worley noise. Ins
 ### How it works
 1. **Feature point generation:** Identical to Worley noise — deterministic hash produces feature points per grid cell.
 
-2. **Neighborhood search:** Identical 3×3×3 neighborhood search, computing squared distances to all 27 feature points.
+2. **Neighborhood search:** Same periodic neighborhood search as Worley noise (3×3×3, or 5×5×5 for a 2-cell tiling), computing squared distances to every searched feature point.
 
 3. **Dual distance tracking:** As distances are computed, the algorithm tracks both the nearest (F1) and second-nearest (F2) squared distances. This requires a single comparison per neighbor: if `d < F1`, shift F1→F2 and set F1=d; else if `d < F2`, set F2=d.
 
-4. **Mode-specific output:** After the search, F1 and F2 are square-rooted to get actual distances. The output mode determines the final value:
+4. **Mode-specific output:** After the search, F1 and F2 are square-rooted to get actual distances. The output mode determines the final value (`CELLULAR_SCALE` = `2/√3`, the reciprocal of the half cell diagonal):
 
    | Mode | Formula | Description |
    |------|---------|-------------|
-   | **F1** | `F1 × 2` (clamped) | Distance to nearest feature point. Identical to Worley noise output. Produces organic cell patterns. |
-   | **F2** | `F2 × 2` (clamped) | Distance to second nearest feature point. Produces broader, more spread-out cell patterns with different topology than F1. |
-   | **F1 - F2** | `|F1 - F2| × 2` (clamped) | Difference between nearest and second-nearest distances. Produces thin lines along cell boundaries where F1 and F2 are similar. The cell interiors appear dark (similar distances) while boundaries appear bright. |
-   | **Jitter** | `F1 × 2` (clamped) | Distance from query point to its assigned feature point. Produces bright spots at feature point locations with falloff outward. |
+   | **F1** | `F1 × 2/√3` (clamped) | Distance to nearest feature point. Identical to Worley noise output. Produces organic cell patterns. |
+   | **F2** | `F2 × 1/√3` (clamped) | Distance to second nearest feature point. Produces broader, more spread-out cell patterns with different topology than F1. |
+   | **F1 - F2** | `|F1 - F2| × 2/√3` (clamped) | Difference between nearest and second-nearest distances. Produces thin lines along cell boundaries where F1 and F2 are similar. The cell interiors appear dark (similar distances) while boundaries appear bright. |
+   | **Jitter** | `d_own × 2/√3` (clamped) | Distance from query point to the feature point of the cell containing it (not the nearest feature point). Produces grid-aligned cell gradients with bright falloff from each cell's own feature point. |
    | **Edge** | `F1 / (F1 + F2) × 2` (clamped) | Normalized edge detection. Produces clean cell boundary outlines. When F1 ≈ F2 (on a boundary), the ratio ≈ 0.5, giving mid-grey edges. Deep inside a cell, F1 ≪ F2, giving dark values. |
 
 ### Seaming
-Identical modulo-based wrapping to Worley noise. Neighbor cell indices are wrapped to ensure seamless tiling.
+Identical periodic wrapping to Worley noise: neighbour cell indices are wrapped modulo the period, and each feature offset is taken to the nearest image of the tiling.
 
 ### Performance
 - Slightly more expensive than Worley noise because it must track both F1 and F2 distances
@@ -151,12 +154,13 @@ Identical modulo-based wrapping to Worley noise. Neighbor cell indices are wrapp
 - **F1:** Organic cell patterns (same as Worley)
 - **F2:** Broader cell regions, different spatial distribution
 - **F1 - F2:** Thin cell boundary lines — useful for tileable texture borders, crack effects, or network patterns
-- **Jitter:** Clustered points — useful for scattered detail, particulate effects, or stippling
+- **Jitter:** Grid-aligned cell gradients — useful for scattered detail, particulate effects, or stippling
 - **Edge:** Clean boundary outlines — useful for cell segmentation visualization, honeycomb patterns, or structural grids
 
 ### Implementation
-- Sample (table): `generate_volumetric.py:266`
-- Sample (direct): `generate_volumetric.py:332`
+Both in `generate_volumetric.py`:
+- Sample (table): `_voronoi_sample_table()`
+- Sample (direct): `_voronoi_sample_direct()`
 
 ---
 
@@ -213,9 +217,9 @@ When `hash_period` divides evenly into `size`, the tiling is mathematically exac
 
 For each octave, a 3D lookup table is pre-computed:
 - Value noise: table of scalar values `(period)³`
-- Worley noise: table of feature points `(period)³` (stored as 3 component arrays)
-- Perlin noise: table of gradient vectors `(period)³` (stored as 3 component arrays)
-- Voronoi noise: table of feature points `(period)³` (stored as 3 component arrays, same as Worley)
+- Worley noise: table of feature points `(period)³` (CPU: one `(rx, ry, rz)` tuple per cell; the GPU module keeps three component arrays for buffer merging)
+- Perlin noise: table of gradient vectors `(period)³` (CPU: one `(gx, gy, gz)` tuple per cell; the GPU module keeps three component arrays)
+- Voronoi noise: table of feature points `(period)³` (same structure as Worley)
 
 This avoids re-computing hashes/gradients/feature points for every voxel sample.
 

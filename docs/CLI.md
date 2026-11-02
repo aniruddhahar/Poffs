@@ -19,6 +19,11 @@ python3 generate_volumetric.py [OPTIONS]
 | `--noise-type` | str | `value` | Noise algorithm: `value`, `worley`, `perlin`, or `voronoi` |
 | `--voronoi-mode` | str | `F1` | Voronoi output mode (only with `--noise-type voronoi`): `F1`, `F2`, `F1 - F2`, `Jitter`, `Edge` |
 
+## Validation
+
+- `--size` must be ≥ 1 and `--octaves` ≥ 1 — argparse exits with an error otherwise
+- Output dimensions are guaranteed powers of two only for `L ∈ {4, 16, 64, 256}`; for other sizes the CLI prints a note when the output is not a power of two
+
 ## Noise Type Codes
 
 | Code | Internal Name | Description |
@@ -35,7 +40,7 @@ python3 generate_volumetric.py [OPTIONS]
 | `F1` | Distance to nearest feature point | Identical to Worley noise — organic cell patterns |
 | `F2` | Distance to second nearest feature point | Broader cell-like regions, different topology |
 | `F1 - F2` | Difference between first and second nearest | Thin lines along cell boundaries |
-| `Jitter` | Distance from query point to its assigned feature point | Points clustered around feature locations |
+| `Jitter` | Distance from query point to the feature point of its containing cell | Grid-aligned cell gradients with bright falloff from each cell center |
 | `Edge` | Normalized edge detection: F1 / (F1 + F2) | Clean cell boundary outlines |
 
 ## Usage Examples

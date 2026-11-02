@@ -12,11 +12,14 @@ A tool for generating volumetric 3D textures as greyscale PNG image grids. Each 
 - **Four noise algorithms** — Value Noise, Worley (Cellular), FBM Perlin Noise, and Voronoi (5 output modes)
 - **GPU acceleration** — Optional OpenCL backend with 100% identical output (install `pyopencl` to enable)
 - **Command-line interface** — Batch generation and scripting support
-- **Interactive GUI** — Live preview, multiple noise types, parameter controls, and OpenCL toggle
+- **Interactive GUI** — Live 2D slice preview and a ray-marched 3D volume view, multiple noise types, parameter controls, and OpenCL toggle
 - **Seamless tiling** — Generate wrap-around 3D textures with no edge seams
 - **Power-of-two output** — Reference sizes chosen so the output PNG is always a power-of-two dimension
 - **Configurable FBM** — Control octaves, frequency, lacunarity, and seed for fine-grained detail
-- **Cancel support** — Threaded generation with progress bar and cancel in the GUI
+- **Cancel support** — Threaded generation with real per-slice progress reporting and cancel on both CPU and GPU paths
+- **Presets** — Save/restore all generation parameters as simple JSON files (GUI buttons)
+- **Cross-platform launchers** — `run.sh` (Linux/macOS), `run.cmd`/`run.ps1` (Windows) with dependency checks
+- **Verification suite** — `tests/run_all.sh`: CLI smokes, cellular tiling checks, GPU↔CPU bit-exactness, GUI end-to-end
 
 ## Noise Types
 
@@ -43,6 +46,15 @@ No installation required. The tool uses only the Python standard library.
 When OpenCL is not installed, all generation runs on CPU automatically.
 
 ## Running
+
+The easiest start is the launcher — it checks/installs dependencies (tkinter, optional `pyopencl`+`numpy` with `--gpu`) and launches the GUI:
+
+| Platform | Command |
+|----------|---------|
+| Linux / macOS | `./run.sh` (macOS: `bash run.sh`; works with the stock bash 3.2) |
+| Windows | `run.cmd` (double-click, or from cmd/PowerShell — wraps `run.ps1`) |
+
+Use `./run.sh cli ...` or `run.cmd cli ...` to pass through to the CLI. On macOS, tkinter comes from the python.org installer or `brew install python-tk@3.x`; on Windows it is the optional "tcl/tk and IDLE" feature of the Python installer.
 
 ### CLI
 
@@ -84,19 +96,21 @@ python generate_volumetric_gui.py
 | **Reference Size (L)** | Cube dimension. Options: 4, 16, 64, 256. Output dimensions are always a power of two (`L × √L`). |
 | **Noise Type** | Select between Value Noise, Worley Noise, FBM Perlin Noise, and Voronoi Noise. |
 | **Voronoi Mode** | When Voronoi Noise is selected, choose output mode: F1, F2, F1-F2, Jitter, or Edge. |
-| **Base Freq** | Base frequency for the noise (0–100). |
+| **Base Freq** | Base frequency for the noise (0.001–2.0). |
 | **Seed** | Random seed for reproducible results. Use the **Randomize** button for a new random seed. |
 | **Octaves** | Number of FBM octaves (detail levels). |
-| **Lacunarity** | Frequency multiplier between octaves (0–2). Default: 2.0. |
+| **Lacunarity** | Frequency multiplier between octaves (0–10, integer steps). Default: 2.0. |
 | **Use OpenCL (GPU)** | When `pyopencl` is installed and an OpenCL GPU is available, enable GPU-accelerated generation. Requires a restart of the generation to take effect. |
+| **Invert Output** | Inverts pixel values (255 − value). Applies to the rendered PNG and the 2D preview (next generation); in the 3D view it re-composites the current frame instantly. |
 | **Output** | File path for the saved PNG. Use **Browse...** to pick a location. |
+| **Save Preset / Load Preset** | Save or restore all generation parameters as a simple JSON preset file. Loaded values are validated (invalid values rejected, out-of-range frequencies clamped). |
 
 #### GUI Workflow
 
-1. **Preview** — Generates a low-resolution preview (16³ volume, upscaled to 256px) for quick iteration without writing a file.
+1. **Preview** — Generates the full L³ volume at the selected Reference Size and displays it in the live preview. The preview panel has a **View** toggle: **2D Slices** shows one Z-slice at full resolution with a slider through all L slices; **3D Volume** ray-marches the volume into a shaded cube you can orient with Yaw/Pitch and tune with Density/Steps. No file is written.
 2. **Render** — Generates the full-resolution volume at the selected Reference Size and writes it to the output PNG file.
 
-A live preview is displayed on the right side of the window and updates after each generation.
+A live preview is displayed on the right side of the window and updates after each generation. The 3D view is progressive (coarse→fine), cancellable, and uses the OpenCL ray-march kernel when GPU acceleration is on (CPU software march otherwise).
 
 ## Output Format
 
@@ -114,14 +128,47 @@ The output is a greyscale PNG where:
 | 64 | 8×8 | 512×512 px |
 | 256 | 16×16 | 4096×4096 px |
 
+## Using the Textures in Unity
+
+This repo ships **`SimpleVolumetric.unitypackage`** — a ready-made URP Shader Graph for raymarching the generated volumes:
+
+- `Assets/Shaders/SimpleVolumetric.shadergraph` — URP shader with a `RaymarchLoop` custom function
+- `Assets/Shaders/raymarchloop.shadersubgraph` — the reusable raymarch loop sub-graph
+
+Exposed material properties: `Texture3D` (the volume), `Density`, `Step Count`, `Step Size`, `Main Scale`/`Main Wind`, `Detail Scale`/`Detail Wind`, `Time`, `Minimum`/`Maximum`.
+
+**Workflow (Unity 6+, URP):**
+
+1. Generate a texture with this tool (GUI or CLI).
+2. In Unity: **Assets ▸ Import Package ▸ Custom Package…** → select `SimpleVolumetric.unitypackage`.
+3. Create a Unity `Texture3D` from the sliced PNG — each grid cell is one Z-slice — e.g. with a small editor script that reads the PNG cells into a `Texture3D` (greyscale, sRGB off recommended).
+4. Create a material with the `SimpleVolumetric` shader, assign your 3D texture to its `Texture3D` slot, and tune density/step controls.
+
 ## Project Structure
 
 ```
 generate_volumetric.py        # CLI entry point + all noise algorithms and generation logic
 generate_volumetric_gui.py    # GUI entry point (thin wrapper, imports from generate_volumetric.py)
 generate_volumetric_gpu.py    # Optional OpenCL GPU backend (auto-falls back to CPU)
+run.sh                        # Dependency-checking launcher (Linux/macOS: gui | cli, --gpu)
+run.cmd / run.ps1             # Windows launcher (same checks/semantics)
+SimpleVolumetric.unitypackage # URP Shader Graph for raymarching textures in Unity
+docs/                         # CLI / GUI / architecture / noise-algorithm reference
+tests/                        # Verification scripts (run_all.sh, gui_smoke.py, gpu_equiv.py, cellular_check.py)
 ```
 
 - `generate_volumetric.py` is self-contained with inline PNG writing and noise algorithms
 - `generate_volumetric_gui.py` imports all generation logic and adds only the Tkinter UI layer
 - `generate_volumetric_gpu.py` provides GPU-accelerated generation via OpenCL (optional dependency)
+
+## Verification
+
+No test framework required — run the smoke/verification suite with:
+
+```bash
+./tests/run_all.sh
+# Optional overrides:
+GUI_PY=python3.12 GPU_PY=python3 ./tests/run_all.sh
+```
+
+It runs CLI smokes + validation, cellular tiling checks (`tests/cellular_check.py` — continuity across cell boundaries and seamless wrapping), GPU↔CPU bit-exact equivalence (`tests/gpu_equiv.py`, skipped without `pyopencl`), and a GUI end-to-end check (`tests/gui_smoke.py`, skipped without a display).

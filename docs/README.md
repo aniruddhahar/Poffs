@@ -7,10 +7,12 @@ A Python tool that generates L×L×L volumetric 3D textures and exports them as 
 **Key characteristics:**
 - Zero external dependencies (Python standard library only); optional `pyopencl` for GPU acceleration
 - Four noise algorithms: Value Noise, Worley (Cellular), FBM Perlin Noise, and Voronoi (5 output modes)
-- GPU acceleration via OpenCL (100% identical output to CPU; auto-fallback if unavailable)
+- GPU acceleration via OpenCL (bit-exact identical output to CPU; auto-fallback if unavailable)
 - Seamless 3D tiling enabled by default (modulo-based wrapping)
-- Command-line and GUI entry points
-- GUI includes "Use OpenCL (GPU)" toggle when OpenCL is available
+- Command-line and GUI entry points; cross-platform launchers (`run.sh` Linux/macOS, `run.cmd`/`run.ps1` Windows)
+- GUI: live 2D slice preview + ray-marched 3D volume view, presets (JSON), real progress + cancel (CPU and GPU), OpenCL toggle
+- `SimpleVolumetric.unitypackage`: URP Shader Graph for raymarching the textures in Unity
+- Verification suite in `tests/run_all.sh` (CLI smokes, cellular tiling checks, GPU↔CPU bit-exactness, GUI end-to-end)
 
 ## Requirements
 
@@ -21,13 +23,13 @@ A Python tool that generates L×L×L volumetric 3D textures and exports them as 
 ## Quick Start
 
 ```bash
-# Generate default 64³ texture (value noise)
-python3 generate_volumetric.py
+# Easiest: launcher with dependency checks (Linux/macOS)
+./run.sh                     # GUI
+./run.sh cli --size 16 ...   # CLI
+# Windows: run.cmd (same semantics)
 
-# Generate with custom parameters
+# Or directly:
 python3 generate_volumetric.py --size 16 --seed 123 --noise-type perlin
-
-# Launch GUI
 python3 generate_volumetric_gui.py
 ```
 
@@ -36,7 +38,11 @@ python3 generate_volumetric_gui.py
 ```
 generate_volumetric.py        # CLI entry point + all noise algorithms and generation logic
 generate_volumetric_gui.py    # Thin Tkinter wrapper (imports all logic from generate_volumetric.py)
-generate_volumetric_gpu.py    # Optional OpenCL GPU backend (falls back to CPU)
+generate_volumetric_gpu.py    # Optional OpenCL GPU backend (delegates fallback to CPU module)
+run.sh                        # Launcher with dependency checks (Linux/macOS)
+run.cmd / run.ps1             # Launcher with dependency checks (Windows)
+SimpleVolumetric.unitypackage # URP Shader Graph (raymarch) for use in Unity
+tests/                        # run_all.sh + GUI smoke + GPU/CPU equivalence + cellular tiling checks
 docs/                         # Documentation
 ```
 
