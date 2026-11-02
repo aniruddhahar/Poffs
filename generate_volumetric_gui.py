@@ -14,7 +14,8 @@ This GUI adds only:
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-import math
+import json
+import queue
 import threading
 from pathlib import Path
 
@@ -44,7 +45,13 @@ except ImportError:
 VALID_SIZES = [4, 16, 64, 256]
 
 NOISE_TYPES = ["Value Noise", "Worley Noise", "FBM Perlin Noise", "Voronoi Noise"]
-PREVIEW_MODES = ["2D Slice", "3D"]
+
+# Max cached upscaled preview grids (each entry is (L*scale)^2 ints).
+MAX_UPSCALE_CACHE = 12
+
+# Base frequency slider/input bounds.
+MIN_BASE_FREQ = 0.001
+MAX_BASE_FREQ = 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -76,8 +83,44 @@ class App:
         self._upscaled_cache = {}
         self._last_frame_size = (0, 0)
         self._last_slice_index = -1
+        self._ui_queue = queue.Queue()
+        self._resize_after_id = None
+        self._slice_after_id = None
 
+        self._configure_fonts()
         self._build_ui()
+        self._poll_ui()
+
+    def _configure_fonts(self):
+        """On X11/XWayland, Tk 9 renders the default Helvetica->Nimbus Sans L
+        match aliased and ignores Xft resources (option_add has no effect);
+        the 'fixed' generic family renders cleanly through Xft/freetype.
+        'fixed' is a Tk generic family (Courier/Menlo on Windows/macOS, whose
+        native fonts already antialias, so those platforms keep defaults)."""
+        if self.root.tk.call("tk", "windowingsystem") != "x11":
+            return
+        for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont",
+                     "TkCaptionFont", "TkSmallCaptionFont", "TkIconFont",
+                     "TkTooltipFont"):
+            try:
+                self.root.tk.call("font", "configure", name, "-family", "fixed")
+            except tk.TclError:
+                pass
+
+    def _post_ui(self, callback, *args):
+        """Queue a callback to run on the main thread (worker threads must
+        never touch Tkinter directly: after() from a non-main thread is
+        silently dropped on thread-aware Tcl builds)."""
+        self._ui_queue.put((callback, args))
+
+    def _poll_ui(self):
+        try:
+            while True:
+                callback, args = self._ui_queue.get_nowait()
+                callback(*args)
+        except queue.Empty:
+            pass
+        self.root.after(50, self._poll_ui)
 
     def _build_ui(self):
         main = ttk.Frame(self.root, padding=12)
@@ -113,9 +156,11 @@ class App:
         ttk.Label(ctrl_frame, text="Base Freq:").pack(anchor=tk.W, pady=(4, 2))
         freq_frame = ttk.Frame(ctrl_frame)
         freq_frame.pack(fill=tk.X, pady=(0, 8))
-        ttk.Scale(freq_frame, from_=0.0, to=100.0,
+        ttk.Scale(freq_frame, from_=MIN_BASE_FREQ, to=MAX_BASE_FREQ,
                   variable=self.base_freq_var, orient=tk.HORIZONTAL).pack(fill=tk.X, expand=True, side=tk.LEFT)
-        ttk.Entry(freq_frame, textvariable=self.base_freq_var, width=7).pack(side=tk.LEFT, padx=(6, 0))
+        freq_entry = ttk.Entry(freq_frame, textvariable=self.base_freq_var, width=7)
+        freq_entry.pack(side=tk.LEFT, padx=(6, 0))
+        freq_entry.bind("<FocusOut>", self._clamp_base_freq)
 
         # Seed
         ttk.Label(ctrl_frame, text="Seed:").pack(anchor=tk.W, pady=(4, 2))
@@ -167,30 +212,30 @@ class App:
         self.btn_preview = ttk.Button(btn_frame, text="Preview", command=self._preview)
         self.btn_preview.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 4))
         self.btn_render = ttk.Button(btn_frame, text="Render", command=self._render)
-        self.btn_render.pack(side=tk.LEFT, expand=True, fill=tk.X)
+        self.btn_render.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 4))
+        self.btn_cancel = ttk.Button(btn_frame, text="Cancel", command=self._cancel, state=tk.DISABLED)
+        self.btn_cancel.pack(side=tk.LEFT, expand=True, fill=tk.X)
+
+        # Preset buttons (below Preview/Render/Cancel)
+        preset_frame = ttk.Frame(ctrl_frame)
+        preset_frame.pack(fill=tk.X, pady=(4, 0))
+        self.btn_save_preset = ttk.Button(preset_frame, text="Save Preset", command=self._save_preset)
+        self.btn_save_preset.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 4))
+        self.btn_load_preset = ttk.Button(preset_frame, text="Load Preset", command=self._load_preset)
+        self.btn_load_preset.pack(side=tk.LEFT, expand=True, fill=tk.X)
 
         # --- Right: Preview ---
         self.preview_frame = ttk.LabelFrame(main, text="Preview", padding=8)
         self.preview_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
         self.preview_frame.bind('<Configure>', self._on_preview_resize)
 
-        # Preview mode selector
-        mode_frame = ttk.Frame(self.preview_frame)
-        mode_frame.pack(fill=tk.X, pady=(0, 4))
-        ttk.Label(mode_frame, text="Mode:").pack(side=tk.LEFT, padx=(0, 4))
-        self.preview_mode_var = tk.StringVar(value="2D Slice")
-        self.mode_combo = ttk.Combobox(mode_frame, textvariable=self.preview_mode_var,
-                                        values=PREVIEW_MODES, state="readonly", width=8)
-        self.mode_combo.pack(side=tk.LEFT)
-        self.mode_combo.bind('<<ComboboxSelected>>', self._on_preview_mode_change)
-
-        # Preview image
+        # Preview image (takes remaining space)
         self.preview_label = ttk.Label(self.preview_frame, image=self.preview_image, relief=tk.SUNKEN)
-        self.preview_label.pack(fill=tk.BOTH, expand=True)
+        self.preview_label.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
 
-        # 2D Slice slider (initially hidden)
+        # 2D Slice slider (fixed at bottom)
         self.slice_slider_frame = ttk.Frame(self.preview_frame)
-        self.slice_slider_frame.pack(fill=tk.X, pady=(4, 0))
+        self.slice_slider_frame.pack(fill=tk.X)
         self.slice_label = ttk.Label(self.slice_slider_frame, text="Slice: 0 / 0")
         self.slice_label.pack(side=tk.LEFT)
         self.slice_var = tk.IntVar(value=0)
@@ -198,11 +243,6 @@ class App:
                                        variable=self.slice_var, orient=tk.HORIZONTAL)
         self.slice_slider.pack(fill=tk.X, expand=True, side=tk.LEFT, padx=(4, 0))
         self.slice_slider.bind('<B1-Motion>', self._on_slice_slider_change)
-
-        # 3D preview placeholder (initially hidden)
-        self._3d_placeholder = ttk.Label(self.preview_frame, text="3D Preview\n(Coming Soon)",
-                                          justify=tk.CENTER)
-        self._3d_placeholder.pack_forget()
 
         # Initialize Voronoi mode selector visibility based on initial noise type
         self._on_noise_type_change()
@@ -229,6 +269,14 @@ class App:
         import random
         self.seed_var.set(random.randint(0, 2**31 - 1))
 
+    def _clamp_base_freq(self, *_args):
+        try:
+            value = float(self.base_freq_var.get())
+        except (tk.TclError, ValueError):
+            value = MIN_BASE_FREQ
+        value = max(MIN_BASE_FREQ, min(MAX_BASE_FREQ, value))
+        self.base_freq_var.set(value)
+
     def _update_status(self, text: str, progress: float = None):
         self.status_label.config(text=text)
         if progress is not None:
@@ -239,11 +287,108 @@ class App:
         state = tk.DISABLED if self.generating else tk.NORMAL
         self.btn_preview.config(state=state)
         self.btn_render.config(state=state)
+        self.btn_cancel.config(state=tk.NORMAL if self.generating else tk.DISABLED)
+        self.btn_save_preset.config(state=state)
+        self.btn_load_preset.config(state=state)
 
-    def _clear_volume_cache(self):
-        """Clear cached volume (e.g. when parameters change)."""
-        self._cached_volume = None
-        self._cached_voronoi_mode = None
+    def _current_preset(self) -> dict:
+        """Snapshot of all generation parameters (raises on invalid entries)."""
+        return {
+            "app": "volumetric-texture-generator",
+            "version": 1,
+            "size": int(self.size_var.get()),
+            "noise_type": self.noise_type_var.get(),
+            "voronoi_mode": self.voronoi_mode_var.get(),
+            "base_freq": float(self.base_freq_var.get()),
+            "seed": int(self.seed_var.get()),
+            "octaves": int(self.octaves_var.get()),
+            "lacunarity": float(self.lacunarity_var.get()),
+            "invert": bool(self.invert_output.get()),
+            "use_opencl": bool(self.use_opencl.get()),
+            "output": self.output_path.get(),
+        }
+
+    def _apply_preset(self, data: dict):
+        """Validate and apply a preset dict; raises ValueError on bad fields."""
+        size = int(data.get("size", self.size_var.get()))
+        if size not in VALID_SIZES:
+            raise ValueError(f"size must be one of {VALID_SIZES}, got {size}")
+        noise_type = str(data.get("noise_type", self.noise_type_var.get()))
+        if noise_type not in NOISE_TYPES:
+            raise ValueError(f"noise_type must be one of {NOISE_TYPES}, got {noise_type!r}")
+        voronoi_mode = str(data.get("voronoi_mode", self.voronoi_mode_var.get()))
+        if voronoi_mode not in VORONOI_MODES:
+            raise ValueError(f"voronoi_mode must be one of {VORONOI_MODES}, got {voronoi_mode!r}")
+        base_freq = max(MIN_BASE_FREQ, min(MAX_BASE_FREQ,
+                                           float(data.get("base_freq", self.base_freq_var.get()))))
+        seed = int(data.get("seed", self.seed_var.get()))
+        octaves = int(data.get("octaves", self.octaves_var.get()))
+        if octaves < 1:
+            raise ValueError(f"octaves must be >= 1, got {octaves}")
+        lacunarity = max(0.0, min(10.0, float(data.get("lacunarity", self.lacunarity_var.get()))))
+
+        self.size_var.set(str(size))
+        self.noise_type_var.set(noise_type)
+        self.voronoi_mode_var.set(voronoi_mode)
+        self.base_freq_var.set(base_freq)
+        self.seed_var.set(seed)
+        self.octaves_var.set(octaves)
+        self.lacunarity_var.set(lacunarity)
+        self.invert_output.set(bool(data.get("invert", self.invert_output.get())))
+        if _OPENCL_AVAILABLE:
+            self.use_opencl.set(bool(data.get("use_opencl", self.use_opencl.get())))
+        output = data.get("output")
+        if isinstance(output, str) and output:
+            self.output_path.set(output)
+
+    def _save_preset(self):
+        try:
+            preset = self._current_preset()
+        except (tk.TclError, ValueError):
+            messagebox.showerror("Invalid values",
+                                 "Fix invalid parameter values before saving a preset.")
+            return
+        path = filedialog.asksaveasfilename(
+            title="Save Preset", defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            Path(path).write_text(json.dumps(preset, indent=2) + "\n")
+        except OSError as e:
+            messagebox.showerror("Save failed", str(e))
+            return
+        self._update_status(f"Preset saved: {Path(path).name}")
+
+    def _load_preset(self):
+        path = filedialog.askopenfilename(
+            title="Load Preset",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            data = json.loads(Path(path).read_text())
+        except (OSError, ValueError) as e:
+            messagebox.showerror("Load failed", f"Could not read preset:\n{e}")
+            return
+        if not isinstance(data, dict):
+            messagebox.showerror("Load failed", "Preset must be a JSON object.")
+            return
+        try:
+            self._apply_preset(data)
+        except (ValueError, TypeError) as e:
+            messagebox.showerror("Invalid preset", str(e))
+            return
+        self._update_status(f"Preset loaded: {Path(path).name}")
+
+    def _cancel(self):
+        if not self.generating:
+            return
+        self._cancel_event.set()
+        self.btn_cancel.config(state=tk.DISABLED)
+        self._update_status("Cancelling...")
 
     def _build_png_data(self, grid: list[list[int]]) -> str:
         """Build PhotoImage data string efficiently using precomputed hex lookup."""
@@ -254,9 +399,6 @@ class App:
             data.append('{' + ' '.join(self._hex_lookup[v] for v in row) + '}')
         return ' '.join(data)
 
-    def _grid_to_photo(self, grid: list[list[int]]) -> None:
-        self.preview_image.put(self._build_png_data(grid))
-
     def _slice_to_photo(self, slice_data: list[list[int]], size: int, target_w: int, target_h: int,
                         slice_index: int = 0) -> None:
         """Convert a single Z-slice to a PhotoImage at appropriate scale."""
@@ -265,9 +407,12 @@ class App:
         display_w = size * scale
         display_h = size * scale
 
-        # Cache upscaled grid by (slice, scale) tuple
+        # Cache upscaled grid by (slice, scale) tuple, with a size cap so
+        # large volumes (L=256) cannot grow the cache unbounded
         cache_key = (slice_index, scale)
         if cache_key not in self._upscaled_cache:
+            if len(self._upscaled_cache) >= MAX_UPSCALE_CACHE:
+                self._upscaled_cache.pop(next(iter(self._upscaled_cache)))
             self._upscaled_cache[cache_key] = upscale_grid(slice_data, scale)
         display_grid = self._upscaled_cache[cache_key]
 
@@ -323,68 +468,55 @@ class App:
 
     def _on_preview_resize(self, event=None):
         """Regenerate the preview image when the preview frame is resized (debounced)."""
-        if self.preview_mode_var.get() == "2D Slice":
-            self.root.after(50, self._update_2d_preview)
+        if self._resize_after_id is not None:
+            self.root.after_cancel(self._resize_after_id)
+        self._resize_after_id = self.root.after(50, self._update_2d_preview)
 
-    def _update_3d_preview(self):
-        """Show the 3D preview placeholder."""
-        self.preview_label.pack_forget()
-        self.slice_slider_frame.pack_forget()
-        self._3d_placeholder.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
-
-    def _update_2d_view(self):
-        """Show the 2D preview UI elements."""
-        self.preview_label.pack(fill=tk.BOTH, expand=True)
-        self.slice_slider_frame.pack(fill=tk.X, pady=(4, 0))
-        self._3d_placeholder.pack_forget()
-
-    def _on_preview_mode_change(self, *args):
-        mode = self.preview_mode_var.get()
-        if mode == "2D Slice":
-            self._update_2d_view()
-            self._update_2d_preview()
-        else:
-            self._update_3d_preview()
+    def _on_slice_slider_change(self, event=None):
+        """Handle slider movement to show different slices (debounced)."""
+        if self._slice_after_id is not None:
+            self.root.after_cancel(self._slice_after_id)
+        self._slice_after_id = self.root.after(30, self._update_2d_preview)
 
     def _preview(self):
         if self.generating:
             return
+        # Read all Tk variables on the main thread; worker threads must not
+        # touch Tkinter objects.
+        params = dict(
+            size=int(self.size_var.get()),
+            octaves=self.octaves_var.get(),
+            base_freq=self.base_freq_var.get(),
+            lacunarity=self.lacunarity_var.get(),
+            seed=self.seed_var.get(),
+            noise_type=self.noise_type_var.get(),
+            voronoi_mode=self.voronoi_mode_var.get() if self.noise_type_var.get() == "Voronoi Noise" else "F1",
+        )
         self._cancel_event.clear()
         self.generating = True
         self._toggle_buttons()
         self._update_status("Generating preview...", 0)
 
-        # Force 2D mode for preview
-        self.preview_mode_var.set("2D Slice")
-        self._update_2d_view()
-
         def worker():
             try:
-                seed = self.seed_var.get()
-                size = int(self.size_var.get())
-                octaves = self.octaves_var.get()
-                base_freq = self.base_freq_var.get()
-                lacunarity = self.lacunarity_var.get()
-                noise_type = self.noise_type_var.get()
-                voronoi_mode = self.voronoi_mode_var.get() if noise_type == "Voronoi Noise" else "F1"
-
                 gen = self._get_volume_generator()
-                self.root.after(0, self._update_status, "Computing volume...", 20)
+                self._post_ui(self._update_status, "Computing volume...", 0)
                 volume = gen(
-                    size, octaves, base_freq, lacunarity,
-                    seed, noise_type, self._cancel_event, voronoi_mode
+                    params["size"], params["octaves"], params["base_freq"],
+                    params["lacunarity"], params["seed"], params["noise_type"],
+                    self._cancel_event, params["voronoi_mode"],
+                    progress_cb=lambda f: self._post_ui(
+                        self._update_status, "Computing volume...", 90.0 * f),
                 )
                 if self._cancel_event.is_set():
-                    self.root.after(0, self._generation_cancelled)
+                    self._post_ui(self._generation_cancelled)
                     return
 
                 # Cache the full-size volume for the 2D slice slider
-                self.root.after(0, self._cache_volume, volume, voronoi_mode)
-
-                # Show the first slice
-                self.root.after(0, self._update_2d_preview)
+                self._post_ui(self._cache_volume, volume, params["voronoi_mode"])
+                self._post_ui(self._update_2d_preview)
             except Exception as e:
-                self.root.after(0, self._generation_failed, str(e))
+                self._post_ui(self._generation_failed, str(e))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -416,13 +548,20 @@ class App:
         self._toggle_buttons()
         self._update_status("Preview ready", 100)
 
-    def _on_slice_slider_change(self, event=None):
-        """Handle slider movement to show different slices (debounced)."""
-        self.root.after(30, self._update_2d_preview)
-
     def _render(self):
         if self.generating:
             return
+        params = dict(
+            size=int(self.size_var.get()),
+            octaves=self.octaves_var.get(),
+            base_freq=self.base_freq_var.get(),
+            lacunarity=self.lacunarity_var.get(),
+            seed=self.seed_var.get(),
+            noise_type=self.noise_type_var.get(),
+            voronoi_mode=self.voronoi_mode_var.get() if self.noise_type_var.get() == "Voronoi Noise" else "F1",
+            output=self.output_path.get(),
+            invert=self.invert_output.get(),
+        )
         self._cancel_event.clear()
         self.generating = True
         self._toggle_buttons()
@@ -430,50 +569,36 @@ class App:
 
         def worker():
             try:
-                seed = self.seed_var.get()
-                size = int(self.size_var.get())
-                octaves = self.octaves_var.get()
-                base_freq = self.base_freq_var.get()
-                lacunarity = self.lacunarity_var.get()
-                output = self.output_path.get()
-                noise_type = self.noise_type_var.get()
-                voronoi_mode = self.voronoi_mode_var.get() if noise_type == "Voronoi Noise" else "F1"
-
                 gen = self._get_volume_generator()
-                self.root.after(0, self._update_status, "Computing volume...", 10)
+                self._post_ui(self._update_status, "Computing volume...", 0)
                 volume = gen(
-                    size, octaves, base_freq, lacunarity,
-                    seed, noise_type, self._cancel_event, voronoi_mode
+                    params["size"], params["octaves"], params["base_freq"],
+                    params["lacunarity"], params["seed"], params["noise_type"],
+                    self._cancel_event, params["voronoi_mode"],
+                    progress_cb=lambda f: self._post_ui(
+                        self._update_status, "Computing volume...", 60.0 * f),
                 )
                 if self._cancel_event.is_set():
-                    self.root.after(0, self._generation_cancelled)
+                    self._post_ui(self._generation_cancelled)
                     return
 
-                self.root.after(0, self._update_status, "Building grid...", 70)
-                cols = math.ceil(math.sqrt(size))
-                rows = math.ceil(size / cols)
-                grid = volume_to_grid(volume, size, cols, rows)
+                self._post_ui(self._update_status, "Building grid...", 70)
+                cols, rows = compute_grid_dims(params["size"])
+                grid = volume_to_grid(volume, params["size"], cols, rows)
 
-                # Apply inversion after generation
-                if self.invert_output.get():
+                if params["invert"]:
                     grid = [[255 - pixel for pixel in row] for row in grid]
 
-                self.root.after(0, self._update_status, "Writing PNG...", 95)
-                total_w = cols * size
-                total_h = rows * size
-                write_png(output, grid, total_w, total_h)
+                self._post_ui(self._update_status, "Writing PNG...", 95)
+                total_w = cols * params["size"]
+                total_h = rows * params["size"]
+                write_png(params["output"], grid, total_w, total_h)
 
-                self.root.after(0, self._generation_complete, output, size, cols, rows)
+                self._post_ui(self._generation_complete, params["output"], params["size"], cols, rows)
             except Exception as e:
-                self.root.after(0, self._generation_failed, str(e))
+                self._post_ui(self._generation_failed, str(e))
 
         threading.Thread(target=worker, daemon=True).start()
-
-    def _preview_ready(self, grid: list[list[int]]):
-        self.generating = False
-        self._grid_to_photo(grid)
-        self._toggle_buttons()
-        self._update_status("Preview ready", 100)
 
     def _generation_cancelled(self):
         self.generating = False

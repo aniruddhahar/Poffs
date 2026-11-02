@@ -16,6 +16,7 @@ import argparse
 import math
 import struct
 import sys
+import zlib
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -30,25 +31,12 @@ def _png_u16(n: int) -> bytes:
 
 def _png_chunk(chunk_type: bytes, data: bytes) -> bytes:
     chunk = chunk_type + data
-    crc = struct.pack(">I", 0xFFFFFFFF & _crc32(chunk))
+    crc = struct.pack(">I", zlib.crc32(chunk) & 0xFFFFFFFF)
     return _png_u32(len(data)) + chunk + crc
-
-def _crc32(data: bytes) -> int:
-    crc = 0xFFFFFFFF
-    for b in data:
-        crc ^= b
-        for _ in range(8):
-            crc = (crc >> 1) ^ 0xEDB88320 if crc & 1 else crc >> 1
-    return crc ^ 0xFFFFFFFF
 
 def write_png(filename: str, pixels: list[list[int]], width: int, height: int):
     """Write a greyscale PNG from a 2D list of 0-255 values."""
-    import zlib
-    raw = b""
-    for row in pixels:
-        raw += b"\x00"  # filter: none
-        raw += bytes(row)
-
+    raw = b"".join(b"\x00" + bytes(row) for row in pixels)
     compressed = zlib.compress(raw)
 
     ihdr = _png_chunk(b"IHDR", _png_u32(width) + _png_u32(height) + b"\x08\x00\x00\x00\x00")
@@ -271,13 +259,12 @@ def _voronoi_sample_table(cx: float, cy: float, cz: float, table: list[list[tupl
         F1      - Distance to nearest feature point (same as Worley)
         F2      - Distance to second nearest feature point
         F1 - F2 - Difference between first and second nearest
-        Jitter  - Distance from feature point to query point (within nearest cell)
+        Jitter  - Distance to the feature point of the cell containing the query point
         Edge    - Normalized edge detection: F1 / (F1 + F2)
     """
     ix, iy, iz = int(cx), int(cy), int(cz)
     f1 = float("inf")
     f2 = float("inf")
-    closest_feat = (0.0, 0.0, 0.0)
 
     for dz in range(-1, 2):
         for dy in range(-1, 2):
@@ -306,7 +293,6 @@ def _voronoi_sample_table(cx: float, cy: float, cz: float, table: list[list[tupl
                 if dist_sq < f1:
                     f2 = f1
                     f1 = dist_sq
-                    closest_feat = (fx, fy, fz)
                 elif dist_sq < f2:
                     f2 = dist_sq
 
@@ -320,7 +306,7 @@ def _voronoi_sample_table(cx: float, cy: float, cz: float, table: list[list[tupl
     elif mode == "F1 - F2":
         return max(0.0, min(1.0, abs(f1 - f2) * 2.0))
     elif mode == "Jitter":
-        return max(0.0, min(1.0, f1 * 2.0))
+        return _jitter_distance_table(table, ix, iy, iz, cx, cy, cz, period)
     elif mode == "Edge":
         denom = f1 + f2
         if denom < 1e-10:
@@ -328,6 +314,30 @@ def _voronoi_sample_table(cx: float, cy: float, cz: float, table: list[list[tupl
         return max(0.0, min(1.0, (f1 / denom) * 2.0))
 
     return max(0.0, min(1.0, f1 * 2.0))
+
+def _jitter_distance_table(cx_table: list[list[tuple[float, float, float]]],
+                           ix: int, iy: int, iz: int,
+                           cx: float, cy: float, cz: float, period: int) -> float:
+    """Jitter mode: distance from query point to the feature point of the
+    cell that contains it (nearest periodic image), normalized to [0, 1]."""
+    feat = cx_table[iz % period][iy % period][ix % period]
+    jx = cx - ix - feat[0]
+    jy = cy - iy - feat[1]
+    jz = cz - iz - feat[2]
+    if jx > 0.5:
+        jx -= 1.0
+    elif jx < -0.5:
+        jx += 1.0
+    if jy > 0.5:
+        jy -= 1.0
+    elif jy < -0.5:
+        jy += 1.0
+    if jz > 0.5:
+        jz -= 1.0
+    elif jz < -0.5:
+        jz += 1.0
+    dist = math.sqrt(jx * jx + jy * jy + jz * jz)
+    return max(0.0, min(1.0, dist * 2.0 / math.sqrt(3.0)))
 
 def _voronoi_sample_direct(sx: float, sy: float, sz: float, hash_period: int, seed: int, mode: str) -> float:
     """Sample Voronoi noise without precomputed table (direct hash)."""
@@ -378,7 +388,24 @@ def _voronoi_sample_direct(sx: float, sy: float, sz: float, hash_period: int, se
     elif mode == "F1 - F2":
         return max(0.0, min(1.0, abs(f1 - f2) * 2.0))
     elif mode == "Jitter":
-        return max(0.0, min(1.0, f1 * 2.0))
+        feat = _worley_hash_coord(ix % hash_period, iy % hash_period, iz % hash_period, seed)
+        jx = sx - ix - feat[0]
+        jy = sy - iy - feat[1]
+        jz = sz - iz - feat[2]
+        if jx > 0.5:
+            jx -= 1.0
+        elif jx < -0.5:
+            jx += 1.0
+        if jy > 0.5:
+            jy -= 1.0
+        elif jy < -0.5:
+            jy += 1.0
+        if jz > 0.5:
+            jz -= 1.0
+        elif jz < -0.5:
+            jz += 1.0
+        dist = math.sqrt(jx * jx + jy * jy + jz * jz)
+        return max(0.0, min(1.0, dist * 2.0 / math.sqrt(3.0)))
     elif mode == "Edge":
         denom = f1 + f2
         if denom < 1e-10:
@@ -471,12 +498,15 @@ MAX_TABLE_PERIOD = 128
 
 def _generate_volume(size: int, octaves: int, base_freq: float,
                       lacunarity: float, seed: int, noise_type: str,
-                      cancel_event=None, voronoi_mode: str = "F1") -> list[list[list[float]]]:
+                      cancel_event=None, voronoi_mode: str = "F1",
+                      progress_cb=None) -> list[list[list[float]]]:
     """Generate LxLxL volume using pre-computed tables for performance.
 
     Args:
         voronoi_mode: Only used when noise_type is "Voronoi Noise".
             One of: "F1", "F2", "F1 - F2", "Jitter", "Edge"
+        progress_cb: Optional callable(fraction 0.0-1.0) invoked once per
+            completed Z-slice (worker thread — must not touch UI directly).
     """
     octave_tables = []
     for octave_idx in range(octaves):
@@ -548,6 +578,8 @@ def _generate_volume(size: int, octaves: int, base_freq: float,
                     max_val += amplitude
                     amplitude *= 0.5
                 volume[z][y][x] = val / max_val
+        if progress_cb:
+            progress_cb((z + 1) / size)
     return volume
 
 # ---------------------------------------------------------------------------
@@ -629,6 +661,11 @@ def main():
     args = parser.parse_args()
 
     size = args.size
+    if size < 1:
+        parser.error("--size must be a positive integer")
+    if args.octaves < 1:
+        parser.error("--octaves must be at least 1")
+
     noise_type_map = {"value": "Value Noise", "worley": "Worley Noise", "perlin": "FBM Perlin Noise", "voronoi": "Voronoi Noise"}
     noise_type = noise_type_map[args.noise_type]
     
@@ -652,6 +689,9 @@ def main():
 
     total_w = cols * size
     total_h = rows * size
+    if total_w & (total_w - 1) or total_h & (total_h - 1):
+        print("  Note: output is not a power of two "
+              "(guaranteed only for L in {4, 16, 64, 256})")
     write_png(args.output, grid, total_w, total_h)
     print(f"Exported {args.output}  ({total_w}x{total_h} px, {cols}x{rows} grid)")
 
