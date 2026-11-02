@@ -31,7 +31,7 @@ python generate_volumetric.py --noise-type voronoi --voronoi-mode "F1 - F2"
 # Run GUI
 python generate_volumetric_gui.py
 
-# Verification suite (CLI smokes + validation, GPU/CPU bit-exact, GUI end-to-end)
+# Verification suite (CLI smokes + validation, cellular tiling checks, GPU/CPU bit-exact, GUI end-to-end)
 ./tests/run_all.sh   # optional: GUI_PY=python3.12 GPU_PY=<python with pyopencl>
 ```
 
@@ -56,10 +56,11 @@ Install `pyopencl` (`pip install pyopencl`) to enable optional GPU-accelerated g
 - **Noise Types:** Value Noise, Worley Noise (cellular), FBM Perlin Noise, Voronoi Noise (5 output modes)
 - **Controls:** Reference Size (L ∈ {4,16,64,256}), Noise Type dropdown, Voronoi Mode selector (shown when Voronoi Noise is selected), Base Freq, Seed, Octaves, Lacunarity (0-10 integer steps), OpenCL toggle, Invert Output checkbox, Save/Load Preset buttons (JSON parameter files)
 - **Output:** Browseable PNG path
-- **Preview Workflow:** Generates full L³ volume, displays single Z-slice at full resolution scaled to fit window, slider to cycle through all slices
+- **Preview Workflow:** Generates full L³ volume; preview panel has a View toggle — **2D Slices** (single Z-slice at full resolution scaled to fit window, slider cycles all slices) or **3D Volume** (ray-marched cube)
 - **Preview Performance:** Pre-computes quantized slices on volume generation, caches upscaled grids per (slice, scale) pair, debounced slider (30ms) and resize (50ms) updates
-- **Invert Output:** Checkbox inverts pixel values (255 - value) after noise generation, applies to both preview and render
-- **Layout:** Controls panel on left, live preview on right
+- **3D Preview (ray-march):** Orthographic front-to-back march of a downsampled flat copy (`volume_to_flat`, ≤ `MAX_RENDER_RES`=128) via `render_volume_3d` (CPU) or the `raymarch` OpenCL kernel (`render_volume_3d_gpu`, float, CPU fallback); preview-only, not bit-exact. Controls (bottom of preview, mirror Unity SimpleVolumetric names): Yaw, Pitch (0-360°), Density (0-100 → /DENSITY_SCALE), Steps (8-32). Progressive coarse→fine passes (48→96→128) posted via `_post_ui`; single-slot worker superseded on each change; frames FIFO-capped (`MAX_FRAME_CACHE`=12); invert applied at blit; cancel between rows (CPU) / passes (GPU). Never modifies the noise functions/kernels.
+- **Invert Output:** Checkbox inverts pixel values (255 - value); applies to render and 2D preview at generation, and is applied at blit time in the 3D view (instant re-composite, no re-march)
+- **Layout:** Controls panel on left, live preview on right with a 2D/3D View toggle at the top
 - **Cancel:** Threaded generation; cancel works on CPU (between rows) and GPU (between Z-slices); progress reported per slice via `progress_cb`
 - **Fonts:** On X11/XWayland, Tk named fonts are forced to the `fixed` generic family (Tk 9 renders the default Helvetica→Nimbus match aliased and ignores Xft resources); Windows/macOS keep native fonts
 - **Completion:** File browser for save path, completion dialog with stats
@@ -74,7 +75,7 @@ Install `pyopencl` (`pip install pyopencl`) to enable optional GPU-accelerated g
 - Output is always greyscale PNG: each cell in the grid is one Z-slice
 - FBM (Fractal Brownian Motion) combines multiple octaves with decreasing amplitude (amplitude halves each octave)
 - Reference size L is chosen so that `L × √L` is always a power of two, ensuring output PNG dimensions are powers of two
-- GPU backend (`generate_volumetric_gpu.py`) provides OpenCL-accelerated generation with four specialized kernels (one per noise type), auto-fallback to CPU. Kernels receive the seed as `np.int32`; seeds outside 0–2³¹−1 route to CPU. GPU generation launches one Z-slice at a time so `cancel_event`/`progress_cb` work on the GPU path
+- GPU backend (`generate_volumetric_gpu.py`) provides OpenCL-accelerated generation with four specialized kernels (one per noise type), auto-fallback to CPU. Kernels receive the seed as `np.int32`; seeds outside 0–2³¹−1 route to CPU. GPU generation launches one Z-slice at a time so `cancel_event`/`progress_cb` work on the GPU path. A fifth `raymarch` kernel (`render_volume_3d_gpu`) powers the 3D preview only — it runs in `float` (preview need not be bit-exact) and falls back to the CPU march; it never touches the four generation kernels or PNG output
 - **Preview caching:** Quantized slices pre-computed during volume generation, upscaled grids cached per (slice, scale) pair, debounced UI updates for smooth slider/resize interaction
 - **Invert Output:** Applied after noise generation and quantization, affects both preview and render
 
@@ -84,7 +85,7 @@ Install `pyopencl` (`pip install pyopencl`) to enable optional GPU-accelerated g
 Deterministic scalar values are placed at integer grid points in 3D space using a hash function, then trilinearly interpolated using smoothstep (`t²(3−2t)`) for smooth transitions. Supports both direct per-voxel sampling and pre-computed lookup tables (capped at 128³ entries) for performance. Fastest of all algorithms. Produces smooth, amorphous, cloud-like patterns suitable for generic texture fills.
 
 ### Worley Noise (Cellular)
-For each query point, computes the distance to the nearest "feature point" — pseudo-random locations in 3D space generated deterministically from a hash. Searches a 3×3×3 neighborhood (including wrapping for seamless tiling) and returns the normalized minimum Euclidean distance scaled to [0, 1]. Produces organic, cell-like, cratered, or stone-like patterns. Commonly used for terrain, stone, and cellular textures.
+For each query point, computes the distance to the nearest "feature point" — pseudo-random locations in 3D space generated deterministically from a hash. Searches a 3×3×3 cell neighborhood (5×5×5 when the tiling is 2 cells wide) and returns the minimum Euclidean distance, taken to the nearest periodic image of the tiling (offsets wrapped by the period, not by one cell) and scaled by `CELLULAR_SCALE` = 2/√3 to [0, 1]. Produces organic, cell-like, cratered, or stone-like patterns. Commonly used for terrain, stone, and cellular textures.
 
 ### FBM Perlin Noise
 Gradient-based noise: deterministic gradient vectors are generated per grid point, then the dot product between each gradient and the position offset to the unit cube corner is computed. Results are trilinearly interpolated using smoothstep. Combined via FBM (Fractal Brownian Motion) across multiple octaves with halving amplitude for rich, multi-scale natural detail. Produces the most natural-looking patterns — cloudy, wooden, or marbled depending on parameters. Slowest algorithm due to gradient computation.

@@ -10,9 +10,9 @@ A Python tool that generates L×L×L volumetric 3D textures and exports them as 
 - GPU acceleration via OpenCL (bit-exact identical output to CPU; auto-fallback if unavailable)
 - Seamless 3D tiling enabled by default (modulo-based wrapping)
 - Command-line and GUI entry points; cross-platform launchers (`run.sh` Linux/macOS, `run.cmd`/`run.ps1` Windows)
-- GUI: live full-volume slice preview, presets (JSON), real progress + cancel (CPU and GPU), OpenCL toggle
+- GUI: live 2D slice preview + ray-marched 3D volume view, presets (JSON), real progress + cancel (CPU and GPU), OpenCL toggle
 - `SimpleVolumetric.unitypackage`: URP Shader Graph for raymarching the textures in Unity
-- Verification suite in `tests/run_all.sh` (CLI smokes, GPU↔CPU bit-exactness, GUI end-to-end)
+- Verification suite in `tests/run_all.sh` (CLI smokes, cellular tiling checks, GPU↔CPU bit-exactness, GUI end-to-end)
 
 ## Requirements
 
@@ -42,7 +42,7 @@ generate_volumetric_gpu.py    # Optional OpenCL GPU backend (delegates fallback 
 run.sh                        # Launcher with dependency checks (Linux/macOS)
 run.cmd / run.ps1             # Launcher with dependency checks (Windows)
 SimpleVolumetric.unitypackage # URP Shader Graph (raymarch) for use in Unity
-tests/                        # run_all.sh + GUI smoke + GPU/CPU equivalence checks
+tests/                        # run_all.sh + GUI smoke + GPU/CPU equivalence + cellular tiling checks
 docs/                         # Documentation
 ```
 

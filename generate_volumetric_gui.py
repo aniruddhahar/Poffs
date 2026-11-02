@@ -26,12 +26,19 @@ from generate_volumetric import (
     volume_to_grid,
     upscale_grid,
     write_png,
+    volume_to_flat,
+    render_volume_3d,
 )
 
 try:
-    from generate_volumetric_gpu import generate_volume_gpu as _generate_volume_gpu, OPENCL_AVAILABLE as _OPENCL_AVAILABLE
+    from generate_volumetric_gpu import (
+        generate_volume_gpu as _generate_volume_gpu,
+        render_volume_3d_gpu as _render_volume_3d_gpu,
+        OPENCL_AVAILABLE as _OPENCL_AVAILABLE,
+    )
 except ImportError:
     _generate_volume_gpu = None
+    _render_volume_3d_gpu = None
     _OPENCL_AVAILABLE = False
 
 # Import Voronoi modes from the main module
@@ -53,6 +60,18 @@ MAX_UPSCALE_CACHE = 12
 MIN_BASE_FREQ = 0.001
 MAX_BASE_FREQ = 2.0
 
+# --- 3D preview (ray-march) constants ---
+# Final ray-march buffer resolution (square). Coarse passes are smaller.
+RENDER_IMAGE = 128
+# Max cached fully-rendered 3D frames (each is RENDER_IMAGE^2 ints).
+MAX_FRAME_CACHE = 12
+# Density slider (0-100) maps to an opacity multiplier via / DENSITY_SCALE.
+DENSITY_SCALE = 20.0
+MIN_DENSITY = 0.0
+MAX_DENSITY = 100.0
+MIN_STEPS = 8
+MAX_STEPS = 32
+
 
 # ---------------------------------------------------------------------------
 # GUI
@@ -63,6 +82,10 @@ class App:
         self.root = root
         self.root.title("Volumetric Texture Generator")
         self.root.resizable(True, True)
+        # Keep the window at least large enough that both the Controls panel and
+        # the preview (with its 2D/3D sliders) are fully drawn; shrinking below
+        # this starves the preview panel and the sliders would not be mapped.
+        self.root.minsize(540, 560)
 
         self.output_path = tk.StringVar(value=str(Path("volumetric_texture.png").resolve()))
         self.size_var = tk.StringVar(value="64")
@@ -86,6 +109,25 @@ class App:
         self._ui_queue = queue.Queue()
         self._resize_after_id = None
         self._slice_after_id = None
+
+        # --- 3D preview (ray-march) state ---
+        self.preview_mode = tk.StringVar(value="2D")
+        self.yaw_var = tk.DoubleVar(value=30.0)
+        self.pitch_var = tk.DoubleVar(value=20.0)
+        self.density_var = tk.DoubleVar(value=40.0)   # slider 0-100 -> /DENSITY_SCALE
+        self.step_count_var = tk.IntVar(value=32)
+        self._render_flat = None
+        self._render_res = 0
+        self._cache_token = 0
+        self._frame_cache = {}
+        self._upscaled_3d_cache = {}
+        self._current_3d_grid = None
+        self._current_3d_res = 0
+        self._current_frame_key = None
+        self._render3d_active = False
+        self._render3d_cancel = threading.Event()
+        self._render3d_token = 0
+        self._render3d_after_id = None
 
         self._configure_fonts()
         self._build_ui()
@@ -189,7 +231,8 @@ class App:
             ttk.Label(ctrl_frame, text="OpenCL: not available", foreground="gray").pack(anchor=tk.W, pady=(8, 0))
 
         # Invert Output
-        ttk.Checkbutton(ctrl_frame, text="Invert Output", variable=self.invert_output).pack(anchor=tk.W, pady=(8, 0))
+        ttk.Checkbutton(ctrl_frame, text="Invert Output", variable=self.invert_output,
+                        command=self._on_invert_toggle).pack(anchor=tk.W, pady=(8, 0))
 
         # Output Path
         ttk.Label(ctrl_frame, text="Output:").pack(anchor=tk.W, pady=(8, 2))
@@ -229,13 +272,22 @@ class App:
         self.preview_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
         self.preview_frame.bind('<Configure>', self._on_preview_resize)
 
-        # Preview image (takes remaining space)
+        # View mode toggle (top of preview panel)
+        self.mode_frame = ttk.Frame(self.preview_frame)
+        self.mode_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 4))
+        ttk.Label(self.mode_frame, text="View:").pack(side=tk.LEFT)
+        ttk.Radiobutton(self.mode_frame, text="2D Slices", variable=self.preview_mode,
+                        value="2D", command=self._on_mode_change).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Radiobutton(self.mode_frame, text="3D Volume", variable=self.preview_mode,
+                        value="3D", command=self._on_mode_change).pack(side=tk.LEFT, padx=(8, 0))
+
+        # Preview image (created here, packed last so the bottom controls are
+        # always reserved — see _set_3d_controls_visible).
         self.preview_label = ttk.Label(self.preview_frame, image=self.preview_image, relief=tk.SUNKEN)
-        self.preview_label.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
 
         # 2D Slice slider (fixed at bottom)
         self.slice_slider_frame = ttk.Frame(self.preview_frame)
-        self.slice_slider_frame.pack(fill=tk.X)
+        self.slice_slider_frame.pack(side=tk.BOTTOM, fill=tk.X)
         self.slice_label = ttk.Label(self.slice_slider_frame, text="Slice: 0 / 0")
         self.slice_label.pack(side=tk.LEFT)
         self.slice_var = tk.IntVar(value=0)
@@ -244,8 +296,46 @@ class App:
         self.slice_slider.pack(fill=tk.X, expand=True, side=tk.LEFT, padx=(4, 0))
         self.slice_slider.bind('<B1-Motion>', self._on_slice_slider_change)
 
+        # 3D ray-march controls (bottom; hidden while in 2D mode). One control
+        # per row so they stay narrow and map even when the preview panel is thin.
+        self.render3d_frame = ttk.Frame(self.preview_frame)
+        self.yaw_scale = self._make_3d_scale(self.render3d_frame, "Yaw", self.yaw_var, 0, 360)
+        self.pitch_scale = self._make_3d_scale(self.render3d_frame, "Pitch", self.pitch_var, 0, 360)
+        self.density_scale = self._make_3d_scale(self.render3d_frame, "Density", self.density_var,
+                                                 MIN_DENSITY, MAX_DENSITY)
+        self.step_scale = self._make_3d_scale(
+            self.render3d_frame, "Steps", self.step_count_var, MIN_STEPS, MAX_STEPS,
+            cmd=lambda v: self.step_count_var.set(int(round(float(v)))))
+        self._set_3d_controls_visible(False)
+
         # Initialize Voronoi mode selector visibility based on initial noise type
         self._on_noise_type_change()
+
+    def _make_3d_scale(self, parent, label, var, lo, hi, cmd=None):
+        """Build a labelled horizontal scale for the 3D controls (stacked one per
+        row); any change schedules a debounced re-render."""
+        f = ttk.Frame(parent)
+        f.pack(side=tk.TOP, fill=tk.X, pady=(1, 0))
+        ttk.Label(f, text=label).pack(side=tk.LEFT)
+        s = ttk.Scale(f, from_=lo, to=hi, variable=var, orient=tk.HORIZONTAL, command=cmd)
+        s.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
+        ttk.Label(f, textvariable=var, width=5).pack(side=tk.LEFT, padx=(4, 0))
+        for seq in ('<B1-Motion>', '<ButtonRelease-1>'):
+            s.bind(seq, self._on_3d_param_change)
+        return s
+
+    def _set_3d_controls_visible(self, visible: bool):
+        # Reserve the bottom control frame first (side=BOTTOM), then (re)pack the
+        # expanding image last so it only takes leftover space. Otherwise a large
+        # PhotoImage makes the Label claim the whole panel and the sliders below
+        # get clipped when the window is short.
+        if visible:
+            self.slice_slider_frame.pack_forget()
+            self.render3d_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(4, 0))
+        else:
+            self.render3d_frame.pack_forget()
+            self.slice_slider_frame.pack(side=tk.BOTTOM, fill=tk.X)
+        self.preview_label.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
 
     def _on_noise_type_change(self, *args):
         """Show/hide Voronoi mode selector based on noise type."""
@@ -287,7 +377,8 @@ class App:
         state = tk.DISABLED if self.generating else tk.NORMAL
         self.btn_preview.config(state=state)
         self.btn_render.config(state=state)
-        self.btn_cancel.config(state=tk.NORMAL if self.generating else tk.DISABLED)
+        cancel_state = tk.NORMAL if (self.generating or self._render3d_active) else tk.DISABLED
+        self.btn_cancel.config(state=cancel_state)
         self.btn_save_preset.config(state=state)
         self.btn_load_preset.config(state=state)
 
@@ -384,11 +475,14 @@ class App:
         self._update_status(f"Preset loaded: {Path(path).name}")
 
     def _cancel(self):
-        if not self.generating:
-            return
-        self._cancel_event.set()
-        self.btn_cancel.config(state=tk.DISABLED)
-        self._update_status("Cancelling...")
+        if self.generating:
+            self._cancel_event.set()
+            self.btn_cancel.config(state=tk.DISABLED)
+            self._update_status("Cancelling...")
+        elif self._render3d_active:
+            self._render3d_cancel.set()
+            self.btn_cancel.config(state=tk.DISABLED)
+            self._update_status("Cancelling 3D render...")
 
     def _build_png_data(self, grid: list[list[int]]) -> str:
         """Build PhotoImage data string efficiently using precomputed hex lookup."""
@@ -434,6 +528,8 @@ class App:
 
     def _update_2d_preview(self):
         """Update the 2D preview with the current slice from cached volume."""
+        if self.preview_mode.get() == "3D":
+            return
         if self._cached_volume is None:
             return
         volume = self._cached_volume
@@ -470,7 +566,8 @@ class App:
         """Regenerate the preview image when the preview frame is resized (debounced)."""
         if self._resize_after_id is not None:
             self.root.after_cancel(self._resize_after_id)
-        self._resize_after_id = self.root.after(50, self._update_2d_preview)
+        target = self._blit_3d if self.preview_mode.get() == "3D" else self._update_2d_preview
+        self._resize_after_id = self.root.after(50, target)
 
     def _on_slice_slider_change(self, event=None):
         """Handle slider movement to show different slices (debounced)."""
@@ -478,9 +575,171 @@ class App:
             self.root.after_cancel(self._slice_after_id)
         self._slice_after_id = self.root.after(30, self._update_2d_preview)
 
+    # --- 3D preview (ray-march) ---
+
+    def _on_mode_change(self):
+        """Switch between the 2D slice view and the 3D ray-marched view."""
+        mode = self.preview_mode.get()
+        self._set_3d_controls_visible(mode == "3D")
+        if mode == "3D":
+            if self._render_flat is not None:
+                self._request_3d_render()
+            else:
+                self._blit_3d()
+        else:
+            # Leaving 3D: abandon any in-flight render so it cannot clobber the 2D view.
+            self._render3d_cancel.set()
+            self._render3d_token += 1
+            self._render3d_active = False
+            self._toggle_buttons()
+            self._last_frame_size = (0, 0)
+            self._update_2d_preview()
+
+    def _on_3d_param_change(self, *_args):
+        """Debounce 3D control changes into a single re-render."""
+        if self._render3d_after_id is not None:
+            self.root.after_cancel(self._render3d_after_id)
+        self._render3d_after_id = self.root.after(30, self._request_3d_render)
+
+    def _on_invert_toggle(self):
+        """Invert is applied at blit time in 3D mode (no re-march needed)."""
+        if self.preview_mode.get() == "3D":
+            self._blit_3d()
+
+    def _get_3d_renderer(self):
+        if self.use_opencl.get() and _render_volume_3d_gpu is not None:
+            return _render_volume_3d_gpu
+        return render_volume_3d
+
+    def _progressive_passes(self, step_count: int):
+        """Coarse -> fine (image_size, steps) passes for progressive refinement."""
+        step = max(MIN_STEPS, min(MAX_STEPS, int(step_count)))
+        return [
+            (48, max(MIN_STEPS, step // 4)),
+            (96, max(12, step // 2)),
+            (RENDER_IMAGE, step),
+        ]
+
+    def _request_3d_render(self):
+        """Cancel any in-flight frame and start a single-slot progressive render."""
+        if self._render_flat is None or self.preview_mode.get() != "3D":
+            return
+        yaw = float(self.yaw_var.get())
+        pitch = float(self.pitch_var.get())
+        density = float(self.density_var.get()) / DENSITY_SCALE
+        step = int(self.step_count_var.get())
+        key = (self._cache_token, round(yaw, 1), round(pitch, 1), round(density, 3), step)
+
+        cached = self._frame_cache.get(key)
+        if cached is not None:
+            self._current_3d_grid = cached
+            self._current_3d_res = len(cached)
+            self._current_frame_key = key
+            self._blit_3d()
+            return
+
+        # Supersede any in-flight frame; its results are discarded by token check.
+        self._render3d_cancel.set()
+        self._render3d_token += 1
+        token = self._render3d_token
+        cancel = threading.Event()
+        self._render3d_cancel = cancel
+        self._render3d_active = True
+        self._toggle_buttons()
+        self._update_status("Rendering 3D...", 0)
+
+        def worker():
+            try:
+                renderer = self._get_3d_renderer()
+                grid = None
+                passes = self._progressive_passes(step)
+                for i, (isize, isteps) in enumerate(passes):
+                    if cancel.is_set():
+                        self._post_ui(self._3d_frame_cancelled, token)
+                        return
+                    grid = renderer(self._render_flat, self._render_res, yaw, pitch,
+                                    density, isteps, isize, cancel_event=cancel)
+                    if grid is None:
+                        self._post_ui(self._3d_frame_cancelled, token)
+                        return
+                    final = (i == len(passes) - 1)
+                    frac = 100.0 * (i + 1) / len(passes)
+                    self._post_ui(self._3d_frame_ready, grid, isize, token, key, final, frac)
+            except Exception as e:
+                self._post_ui(self._3d_frame_failed, str(e))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _3d_frame_ready(self, grid, isize, token, key, final, frac):
+        """Main-thread handler for a progressive frame (only the latest render wins)."""
+        if token != self._render3d_token:
+            return
+        self._current_3d_grid = grid
+        self._current_3d_res = isize
+        self._current_frame_key = key
+        if final:
+            self._frame_cache[key] = grid
+            while len(self._frame_cache) > MAX_FRAME_CACHE:
+                self._frame_cache.pop(next(iter(self._frame_cache)))
+            self._render3d_active = False
+            self._toggle_buttons()
+            self._update_status("3D preview ready", 100)
+        else:
+            self._update_status("Rendering 3D...", frac)
+        self._blit_3d()
+
+    def _3d_frame_cancelled(self, token):
+        if token != self._render3d_token:
+            return
+        self._render3d_active = False
+        self._toggle_buttons()
+        self._update_status("3D render cancelled", 0)
+
+    def _3d_frame_failed(self, error):
+        self._render3d_active = False
+        self._toggle_buttons()
+        self._update_status("3D render error", 0)
+        messagebox.showerror("Error", f"3D render failed:\n{error}")
+
+    def _blit_3d(self):
+        """Composite the current 3D frame into the preview PhotoImage at display
+        size (nearest upscale + integer scale, invert applied here)."""
+        if self.preview_mode.get() != "3D":
+            return
+        grid = self._current_3d_grid
+        if grid is None:
+            return
+        res = self._current_3d_res
+        frame_w = self.preview_frame.winfo_width()
+        frame_h = self.preview_frame.winfo_height()
+        if frame_w < 2 or frame_h < 2 or res < 1:
+            return
+        scale = max(1, min(frame_w, frame_h) // res)
+        invert = self.invert_output.get()
+        ckey = (self._current_frame_key, scale, invert)
+        disp = self._upscaled_3d_cache.get(ckey)
+        if disp is None:
+            while len(self._upscaled_3d_cache) >= MAX_UPSCALE_CACHE:
+                self._upscaled_3d_cache.pop(next(iter(self._upscaled_3d_cache)))
+            disp = upscale_grid(grid, scale) if scale > 1 else [row[:] for row in grid]
+            if invert:
+                disp = [[255 - v for v in row] for row in disp]
+            self._upscaled_3d_cache[ckey] = disp
+        disp_w = len(disp[0])
+        disp_h = len(disp)
+        if self.preview_image.width() != disp_w or self.preview_image.height() != disp_h:
+            self.preview_image = tk.PhotoImage(width=disp_w, height=disp_h)
+            self.preview_label.config(image=self.preview_image)
+        self.preview_image.put(self._build_png_data(disp))
+
     def _preview(self):
         if self.generating:
             return
+        # Supersede any in-flight 3D render (avoids OpenCL queue contention and
+        # stale frames while the volume is being regenerated).
+        self._render3d_cancel.set()
+        self._render3d_token += 1
+        self._render3d_active = False
         # Read all Tk variables on the main thread; worker threads must not
         # touch Tkinter objects.
         params = dict(
@@ -512,15 +771,18 @@ class App:
                     self._post_ui(self._generation_cancelled)
                     return
 
+                # Build the downsampled flat copy for the 3D ray-march off the
+                # main thread, then cache everything on the main thread.
+                flat, rres = volume_to_flat(volume)
                 # Cache the full-size volume for the 2D slice slider
-                self._post_ui(self._cache_volume, volume, params["voronoi_mode"])
+                self._post_ui(self._cache_volume, volume, params["voronoi_mode"], flat, rres)
                 self._post_ui(self._update_2d_preview)
             except Exception as e:
                 self._post_ui(self._generation_failed, str(e))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _cache_volume(self, volume: list, voronoi_mode: str):
+    def _cache_volume(self, volume: list, voronoi_mode: str, flat=None, rres: int = 0):
         """Cache the generated volume, pre-compute quantized slices, and configure the slice slider."""
         self._cached_volume = volume
         self._cached_voronoi_mode = voronoi_mode
@@ -539,6 +801,15 @@ class App:
         # Clear upscaling cache
         self._upscaled_cache.clear()
         self._last_frame_size = (0, 0)
+
+        # 3D ray-march: store the flat (downsampled) volume and reset frame caches.
+        self._render_flat = flat
+        self._render_res = rres
+        self._cache_token += 1
+        self._frame_cache.clear()
+        self._upscaled_3d_cache.clear()
+        self._current_3d_grid = None
+        self._current_frame_key = None
         
         # Configure slider range
         self.slice_slider.config(from_=0, to=size - 1)
@@ -548,9 +819,16 @@ class App:
         self._toggle_buttons()
         self._update_status("Preview ready", 100)
 
+        if self.preview_mode.get() == "3D":
+            self._request_3d_render()
+
     def _render(self):
         if self.generating:
             return
+        # Supersede any in-flight 3D render before starting a full render.
+        self._render3d_cancel.set()
+        self._render3d_token += 1
+        self._render3d_active = False
         params = dict(
             size=int(self.size_var.get()),
             octaves=self.octaves_var.get(),

@@ -9,7 +9,7 @@ python3 generate_volumetric_gui.py
 ## Layout
 
 - **Left panel:** Controls (Reference Size, Noise Type, parameters, output path, buttons)
-- **Right panel:** Live preview of the generated texture
+- **Right panel:** Live preview of the generated texture, with a **View** toggle at the top: **2D Slices** (a Z-slice + slider) or **3D Volume** (a ray-marched cube)
 
 ## Controls
 
@@ -75,7 +75,31 @@ When `pyopencl` is installed and an OpenCL-compatible GPU is available, a checkb
 
 ### Invert Output
 
-Checkbox that inverts pixel values (`255 − value`) after noise generation and quantization. Applies to both the live preview and the rendered PNG.
+Checkbox that inverts pixel values (`255 − value`). In 2D it applies after noise generation and quantization (next Preview/Render); in the 3D view it is applied at blit time, so toggling it re-composites the current frame instantly (no re-march).
+
+### View Mode: 2D Slices vs 3D Volume
+
+The preview panel has a **View** toggle. **2D Slices** (default) shows one Z-slice at full resolution with a slider through all L slices — unchanged from earlier behaviour. **3D Volume** ray-marches the volume into a shaded cube.
+
+Switching to 3D re-renders automatically once a volume is cached. The 3D view adds these controls along the bottom of the preview panel (replacing the slice slider):
+
+| Control | Range | Meaning |
+|---------|-------|---------|
+| **Yaw** | 0–360° | Rotation about the vertical axis |
+| **Pitch** | 0–360° | Rotation about the horizontal axis |
+| **Density** | 0–100 | Opacity multiplier (higher = more absorbing/brighter) |
+| **Steps** | 8–32 | Ray-march sample count per ray (quality vs speed) |
+
+Slider names mirror the Unity `SimpleVolumetric` reference (Density, Step Count) plus free yaw/pitch.
+
+### 3D Render Model
+
+- **Orthographic front-to-back ray-march** through the cached volume: one ray per pixel of a square buffer (final 128×128), trilinear density sampling with seamless wrapping, alpha-accumulated greyscale emission composited over black.
+- The volume is **downsampled to at most 128³** (`volume_to_flat`) before marching, so 256³ stays responsive.
+- **Progressive refinement:** each parameter change renders coarse→fine (48²→96²→128²) and posts each pass, so an approximate image appears fast and sharpens.
+- **Single-slot worker:** a new parameter change cancels the previous in-flight frame; rendered frames are cached FIFO-capped (`MAX_FRAME_CACHE=12`), and the on-screen upscale is cached too.
+- **Cancel** works mid-render (CPU checks between rows; GPU between passes).
+- **Backend:** uses the OpenCL ray-march kernel when "Use OpenCL (GPU)" is on, otherwise the CPU software march. Preview output is **not** required to be bit-exact (that guarantee is for the exported PNG only), and CPU/GPU frames match closely.
 
 ### Output
 
@@ -90,7 +114,7 @@ File path for the saved PNG.
 |--------|--------|
 | **Preview** | Generates the full L³ volume and displays it in the live preview without writing a file (see Workflow below) |
 | **Render** | Generates the full volume and writes it to the output PNG file |
-| **Cancel** | Enabled during generation; aborts it and returns to `Ready` state |
+| **Cancel** | Enabled during generation or a 3D render; aborts whichever is running |
 | **Save Preset** | Saves all generation parameters to a JSON file via the file picker |
 | **Load Preset** | Loads generation parameters from a preset JSON file |
 
@@ -101,7 +125,7 @@ Presets are plain JSON files (stdlib `json`, no schema library) capturing: `size
 ### Progress Bar & Status
 
 - Displays real generation progress, updated once per completed Z-slice on both CPU and GPU paths (volume phase maps to 0–90% for Preview, 0–60% for Render)
-- Shows status text: `Ready`, `Computing volume...`, `Building grid...`, `Writing PNG...`, `Preview ready`, `Done!`, `Cancelled`, `Preset saved/loaded: <name>`, or `Error`
+- Shows status text: `Ready`, `Computing volume...`, `Building grid...`, `Writing PNG...`, `Preview ready`, `Rendering 3D...`, `3D preview ready`, `3D render cancelled`, `Done!`, `Cancelled`, `Preset saved/loaded: <name>`, or `Error`
 - All buttons (including preset buttons) are disabled during generation
 
 ## Workflow
@@ -111,8 +135,9 @@ Presets are plain JSON files (stdlib `json`, no schema library) capturing: `size
 1. Click **Preview**
 2. The full L³ volume is generated at the selected Reference Size (same generation as Render)
 3. The right panel shows one Z-slice at full resolution, scaled to fit the window; the slider cycles through all L slices
-4. No file is written — useful for rapid parameter exploration
-5. Quantized slices are pre-computed and upscaled grids cached, so slider/resize interaction is smooth
+4. Switch the **View** toggle to **3D Volume** to see a ray-marched cube; drag Yaw/Pitch/Density/Steps to re-orient and refine it (progressive, cancellable)
+5. No file is written — useful for rapid parameter exploration
+6. Quantized slices are pre-computed and upscaled grids cached (2D); the downsampled flat volume and rendered 3D frames are cached (3D), so interaction stays smooth
 
 ### Render
 
@@ -132,7 +157,9 @@ Clicking **Cancel** sets the `_cancel_event` threading flag. The CPU generator c
 ## Limitations
 
 - Requires a display server (won't work in headless environments)
+- The window has a minimum size (~540×560) so the Controls panel and the preview's 2D/3D sliders always stay drawn; the bottom sliders are reserved before the expanding image so they never get clipped on resize
 - Large sizes (256³) may be slow and consume significant memory
+- The 3D preview ray-marches a copy downsampled to at most 128³; on CPU it is not fully interactive (one progressive render per parameter change), while the optional OpenCL kernel gives fast, responsive rotation
 - On X11/XWayland the GUI forces the `fixed` generic font family for Tk named fonts: Tk 9 renders the default Helvetica→Nimbus Sans L match aliased and ignores Xft resources there. Windows/macOS keep native system fonts (antialiased by default)
 
 ## OpenCL GPU Backend
@@ -145,6 +172,11 @@ The GPU backend (`generate_volumetric_gpu.py`) provides optional OpenCL-accelera
 - Octave tables are merged into contiguous GPU arrays; one thread per voxel, launched one Z-slice at a time (so `cancel_event` and progress work)
 - Falls back to CPU (the canonical `generate_volumetric.py` generator) if OpenCL is unavailable, a kernel fails, any octave's table period exceeds 128, or the seed is outside 0–2³¹−1
 - Output is bitwise identical to CPU (8-bit quantization matches 100%)
+
+**3D preview ray-march (preview-only):**
+- A separate `raymarch` kernel renders the 3D preview by marching the downsampled volume; it runs one 2D launch over pixels per progressive pass, checking `cancel_event` between passes
+- It samples a `float` copy of the volume and is **not** required to be bit-exact — the four noise-generation kernels above still enforce CPU/GPU bit-exactness of the exported PNG, which the preview never touches
+- Falls back to the CPU software march when OpenCL is unavailable or the kernel fails
 
 **Performance:**
 - For small volumes (4³–64³), CPU and GPU have similar runtime (overhead dominates)

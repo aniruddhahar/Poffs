@@ -32,6 +32,15 @@ def wait_then(next_fn, tries=0):
     else:
         root.after(50, lambda: wait_then(next_fn, tries + 1))
 
+def wait_3d(next_fn, tries=0):
+    if not app.generating and not app._render3d_active:
+        root.after(50, next_fn)
+    elif tries > 1200:
+        check("3D render timeout", False)
+        finish()
+    else:
+        root.after(50, lambda: wait_3d(next_fn, tries + 1))
+
 # --- 1) Preview: Voronoi Jitter at 64^3 ---
 def step1():
     app.size_var.set("64")
@@ -62,6 +71,27 @@ def step2b():
 def step2c():
     check("cancelled status", app.status_label["text"] == "Cancelled")
     check("cancel button disabled after", str(app.btn_cancel["state"]) == "disabled")
+    # --- 2d) Preview must honour the selected Voronoi mode ---
+    # Force the CPU generator so the cached volume can be compared bit-for-bit
+    # against a reference generation.
+    app.use_opencl.set(False)
+    app.size_var.set("16")
+    app.noise_type_var.set("Voronoi Noise")
+    app.voronoi_mode_var.set("Edge")
+    app.base_freq_var.set(0.25)
+    app.octaves_var.set(1)
+    app._preview()
+    wait_then(step2d)
+
+def step2d():
+    import generate_volumetric as GV
+    edge = GV._generate_volume(16, 1, 0.25, 2.0, int(app.seed_var.get()),
+                               "Voronoi Noise", None, "Edge")[0][0][0]
+    f1 = GV._generate_volume(16, 1, 0.25, 2.0, int(app.seed_var.get()),
+                             "Voronoi Noise", None, "F1")[0][0][0]
+    got = app._cached_volume[0][0][0]
+    check("preview honours voronoi mode", got == edge and abs(f1 - edge) > 1e-9)
+    app.use_opencl.set(True)
     # --- 3) Render to /tmp ---
     if os.path.exists(OUT):
         os.remove(OUT)
@@ -123,6 +153,63 @@ def step5b(inv):
         app._last_frame_size = (0, 0)
         app._update_2d_preview()
     print(f"upscaled cache entries after 16 slices: {len(app._upscaled_cache)}", flush=True)
+    step8()
+
+# --- 8) 3D ray-march preview ---
+def step8():
+    # Small volume + small step count keeps the CPU march fast for the smoke test.
+    app.size_var.set("16")
+    app.noise_type_var.set("Value Noise")
+    app.base_freq_var.set(0.05)
+    app.step_count_var.set(16)
+    app._preview()          # mode still 2D -> no auto 3D render
+    wait_then(step8b)
+
+def step8b():
+    app.preview_mode.set("3D")
+    app._on_mode_change()   # triggers progressive 3D render of the fresh volume
+    wait_3d(step9)
+
+def step9():
+    check("3D frame produced",
+          app._current_3d_grid is not None and len(app._current_3d_grid) == G.RENDER_IMAGE
+          and app.preview_image.width() > 1 and app.preview_image.height() > 1)
+    check("3D ready status", "3D preview ready" in app.status_label["text"])
+    t0 = app._render3d_token
+    app.yaw_var.set(120.0)
+    app._request_3d_render()
+    wait_3d(lambda: step10(t0))
+
+def step10(t0):
+    check("control change re-renders",
+          app._render3d_token > t0 and app._current_3d_grid is not None
+          and len(app._current_3d_grid) == G.RENDER_IMAGE)
+    # Frame cache FIFO bounding: feed more than the cap of distinct final frames.
+    # _blit_3d is stubbed so this checks eviction logic without expensive upscaling.
+    tok = app._render3d_token
+    orig_blit = app._blit_3d
+    app._blit_3d = lambda: None
+    try:
+        for i in range(G.MAX_FRAME_CACHE + 8):
+            app._3d_frame_ready([[0] * 128 for _ in range(128)], 128, tok, ("synth", i), True, 100.0)
+    finally:
+        app._blit_3d = orig_blit
+    check("3D frame cache bounded", 0 < len(app._frame_cache) <= G.MAX_FRAME_CACHE)
+    check("3D upscale cache bounded", len(app._upscaled_3d_cache) <= G.MAX_UPSCALE_CACHE)
+    # Cancel mid-render: _request_3d_render sets _render3d_active (and enables
+    # Cancel) synchronously, so cancelling immediately after is race-free.
+    app.use_opencl.set(False)
+    app.step_count_var.set(G.MAX_STEPS)
+    app.yaw_var.set(30.0)
+    app._request_3d_render()
+    check("cancel enabled during 3D render", str(app.btn_cancel["state"]) == "normal")
+    app._cancel()
+    wait_3d(step11)
+
+def step11():
+    check("3D cancel status", "cancelled" in app.status_label["text"].lower())
+    check("3D cancel disables button", str(app.btn_cancel["state"]) == "disabled")
+    app.use_opencl.set(True)
     finish()
 
 root.after(300, step1)

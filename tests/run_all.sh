@@ -31,6 +31,9 @@ else
   echo "PASS: octaves 0 rejected"
 fi
 
+echo "== Cellular tiling (continuity + seamless wrap) =="
+$PY tests/cellular_check.py || fails=$((fails+1))
+
 echo "== GPU/CPU bit-exact equivalence (optional: needs pyopencl + OpenCL device) =="
 GPU_PY=${GPU_PY:-$PY}
 if $GPU_PY -c "import pyopencl" >/dev/null 2>&1; then

@@ -99,6 +99,17 @@ kernel void generate_value(
 
 _KERNEL_WORLEY = r"""
 #pragma OPENCL EXTENSION cl_khr_fp64 : enable
+/* Nearest periodic image of a feature offset. The wrap must use the tiling
+   period (not one cell) or neighbour features get aliased into the current
+   cell, which is discontinuous at cell boundaries for period >= 4.
+   Bit-exact twin of generate_volumetric._cellular_offset. */
+double cell_off(double q, int cell, double feat, int period) {
+    volatile double hp = (double)period / 2.0;
+    volatile double d = q - (double)cell - feat;
+    if (d > hp) d -= (double)period;
+    else if (d < -hp) d += (double)period;
+    return d;
+}
 kernel void generate_worley(
     int size, int octaves, int seed,
     constant int* periods, constant int* p2s, constant int* offsets,
@@ -122,22 +133,20 @@ kernel void generate_worley(
         double cz = (double)z / (double)size * (double)period;
 
         int ix = (int)cx, iy = (int)cy, iz = (int)cz;
+        int r = (period >= 3) ? 1 : 2;
         double min_dsq = 1e300;
 
-        for (int dz = -1; dz <= 1; dz++) {
-            for (int dy = -1; dy <= 1; dy++) {
-                for (int dx = -1; dx <= 1; dx++) {
+        for (int dz = -r; dz <= r; dz++) {
+            for (int dy = -r; dy <= r; dy++) {
+                for (int dx = -r; dx <= r; dx++) {
                     int ci = ((ix+dx) % period + period) % period;
                     int cj = ((iy+dy) % period + period) % period;
                     int ck = ((iz+dz) % period + period) % period;
                     int ti = offset + ck*p2 + cj*period + ci;
 
-                    double fx = cx - (double)ix - tx[ti];
-                    double fy = cy - (double)iy - ty[ti];
-                    double fz = cz - (double)iz - tz[ti];
-                    if (fx > 0.5) fx -= 1.0; else if (fx < -0.5) fx += 1.0;
-                    if (fy > 0.5) fy -= 1.0; else if (fy < -0.5) fy += 1.0;
-                    if (fz > 0.5) fz -= 1.0; else if (fz < -0.5) fz += 1.0;
+                    double fx = cell_off(cx, ix+dx, tx[ti], period);
+                    double fy = cell_off(cy, iy+dy, ty[ti], period);
+                    double fz = cell_off(cz, iz+dz, tz[ti], period);
 
                     volatile double qx = fx*fx, qy = fy*fy, qz = fz*fz;
                     double d = qx + qy + qz;
@@ -145,7 +154,8 @@ kernel void generate_worley(
                 }
             }
         }
-        double s = sqrt(min_dsq) * 2.0;
+        /* 0x1.279a74590331dp+0 == exactly Python's 2.0/math.sqrt(3.0) */
+        double s = sqrt(min_dsq) * 0x1.279a74590331dp+0;
         if (s > 1.0) s = 1.0; if (s < 0.0) s = 0.0;
         volatile double p = amp * s;
         val += p; max_v += amp; amp *= 0.5;
@@ -236,6 +246,13 @@ kernel void generate_perlin(
 _KERNEL_VORONOI = r"""
 #pragma OPENCL EXTENSION cl_khr_fp64 : enable
 /* Voronoi noise kernel */
+double cell_off(double q, int cell, double feat, int period) {
+    volatile double hp = (double)period / 2.0;
+    volatile double d = q - (double)cell - feat;
+    if (d > hp) d -= (double)period;
+    else if (d < -hp) d += (double)period;
+    return d;
+}
 kernel void generate_voronoi(
     int size, int octaves, int seed, int voronoi_mode,
     constant int* periods, constant int* p2s, constant int* offsets,
@@ -259,22 +276,20 @@ kernel void generate_voronoi(
         double cz = (double)z / (double)size * (double)period;
 
         int ix = (int)cx, iy = (int)cy, iz = (int)cz;
+        int r = (period >= 3) ? 1 : 2;
         double f1 = 1e300, f2 = 1e300;
 
-        for (int dz = -1; dz <= 1; dz++) {
-            for (int dy = -1; dy <= 1; dy++) {
-                for (int dx = -1; dx <= 1; dx++) {
+        for (int dz = -r; dz <= r; dz++) {
+            for (int dy = -r; dy <= r; dy++) {
+                for (int dx = -r; dx <= r; dx++) {
                     int ci = ((ix+dx) % period + period) % period;
                     int cj = ((iy+dy) % period + period) % period;
                     int ck = ((iz+dz) % period + period) % period;
                     int ti = offset + ck*p2 + cj*period + ci;
 
-                    double fx = cx - (double)ix - tx[ti];
-                    double fy = cy - (double)iy - ty[ti];
-                    double fz = cz - (double)iz - tz[ti];
-                    if (fx > 0.5) fx -= 1.0; else if (fx < -0.5) fx += 1.0;
-                    if (fy > 0.5) fy -= 1.0; else if (fy < -0.5) fy += 1.0;
-                    if (fz > 0.5) fz -= 1.0; else if (fz < -0.5) fz += 1.0;
+                    double fx = cell_off(cx, ix+dx, tx[ti], period);
+                    double fy = cell_off(cy, iy+dy, ty[ti], period);
+                    double fz = cell_off(cz, iz+dz, tz[ti], period);
 
                     volatile double qx = fx*fx, qy = fy*fy, qz = fz*fz;
                     double d = qx + qy + qz;
@@ -288,22 +303,21 @@ kernel void generate_voronoi(
         double s2 = sqrt(f2);
         double sample = 0.0;
 
-        if (voronoi_mode == 0) sample = s1 * 2.0;
-        else if (voronoi_mode == 1) sample = s2 * 2.0;
-        else if (voronoi_mode == 2) sample = (s2 - s1) * 2.0; /* s1 <= s2 by construction */
+        /* 0x1.279a74590331dp+0 == Python 2.0/math.sqrt(3.0);
+           0x1.279a74590331dp-1 == Python 1.0/math.sqrt(3.0) */
+        if (voronoi_mode == 0) sample = s1 * 0x1.279a74590331dp+0;
+        else if (voronoi_mode == 1) sample = s2 * 0x1.279a74590331dp-1;
+        else if (voronoi_mode == 2) sample = (s2 - s1) * 0x1.279a74590331dp+0; /* s1 <= s2 by construction */
         else if (voronoi_mode == 3) {
             int ci = ((ix % period) + period) % period;
             int cj = ((iy % period) + period) % period;
             int ck = ((iz % period) + period) % period;
             int ti0 = offset + ck*p2 + cj*period + ci;
-            double jx = cx - (double)ix - tx[ti0];
-            double jy = cy - (double)iy - ty[ti0];
-            double jz = cz - (double)iz - tz[ti0];
-            if (jx > 0.5) jx -= 1.0; else if (jx < -0.5) jx += 1.0;
-            if (jy > 0.5) jy -= 1.0; else if (jy < -0.5) jy += 1.0;
-            if (jz > 0.5) jz -= 1.0; else if (jz < -0.5) jz += 1.0;
+            double jx = cell_off(cx, ix, tx[ti0], period);
+            double jy = cell_off(cy, iy, ty[ti0], period);
+            double jz = cell_off(cz, iz, tz[ti0], period);
             volatile double jqx = jx*jx, jqy = jy*jy, jqz = jz*jz;
-            sample = sqrt(jqx + jqy + jqz) * 2.0 / 1.7320508075688772;
+            sample = sqrt(jqx + jqy + jqz) * 0x1.279a74590331dp+0;
         }
         else if (voronoi_mode == 4) {
             double denom = s1 + s2;
@@ -316,6 +330,108 @@ kernel void generate_voronoi(
         val += p; max_v += amp; amp *= 0.5;
     }
     output[idx] = val / max_v;
+}
+"""
+
+# ---------------------------------------------------------------------------
+# 3D preview ray-march kernel (preview-only; float, NOT required bit-exact)
+# ---------------------------------------------------------------------------
+
+_KERNEL_RAYMARCH = r"""
+kernel void raymarch(
+    int res, int res_img, int step_count,
+    float density_scale, float cy, float sy, float cp, float sp,
+    __global const float* vol,
+    __global float* out
+) {
+    int px = get_global_id(0);
+    int py = get_global_id(1);
+    if (px >= res_img || py >= res_img) return;
+
+    float inv_img = 1.0f / (float)res_img;
+    float sx = (px + 0.5f) * inv_img * 2.0f - 1.0f;
+    float syndc = 1.0f - (py + 0.5f) * inv_img * 2.0f;
+    float frustum = 0.9f;
+    float ox = sx * frustum, oy = syndc * frustum, oz = 1.0f;
+    float dx = 0.0f, dy = 0.0f, dz = -1.0f;
+
+    /* rotate origin and direction by yaw (about Y) then pitch (about X) */
+    float x1 = ox*cy + oz*sy;
+    float z1 = -ox*sy + oz*cy;
+    float y1 = oy*cp - z1*sp;
+    float z2 = oy*sp + z1*cp;
+    ox = x1; oy = y1; oz = z2;
+    x1 = dx*cy + dz*sy;
+    z1 = -dx*sy + dz*cy;
+    y1 = dy*cp - z1*sp;
+    z2 = dy*sp + z1*cp;
+    dx = x1; dy = y1; dz = z2;
+
+    float hf = 0.5f;
+    float tmin = -1e30f, tmax = 1e30f;
+    bool miss = false;
+
+    if (fabs(dx) < 1e-9f) { if (ox < -hf || ox > hf) miss = true; }
+    else {
+        float inv = 1.0f/dx; float ta = (-hf-ox)*inv, tb = (hf-ox)*inv;
+        if (ta > tb) { float t = ta; ta = tb; tb = t; }
+        if (ta > tmin) tmin = ta; if (tb < tmax) tmax = tb;
+        if (tmin > tmax) miss = true;
+    }
+    if (!miss) {
+        if (fabs(dy) < 1e-9f) { if (oy < -hf || oy > hf) miss = true; }
+        else {
+            float inv = 1.0f/dy; float ta = (-hf-oy)*inv, tb = (hf-oy)*inv;
+            if (ta > tb) { float t = ta; ta = tb; tb = t; }
+            if (ta > tmin) tmin = ta; if (tb < tmax) tmax = tb;
+            if (tmin > tmax) miss = true;
+        }
+    }
+    if (!miss) {
+        if (fabs(dz) < 1e-9f) { if (oz < -hf || oz > hf) miss = true; }
+        else {
+            float inv = 1.0f/dz; float ta = (-hf-oz)*inv, tb = (hf-oz)*inv;
+            if (ta > tb) { float t = ta; ta = tb; tb = t; }
+            if (ta > tmin) tmin = ta; if (tb < tmax) tmax = tb;
+            if (tmin > tmax) miss = true;
+        }
+    }
+    if (miss || tmax < 0.0f) { out[py*res_img + px] = 0.0f; return; }
+
+    float tstart = tmin > 0.0f ? tmin : 0.0f;
+    float ds = (tmax - tstart) / (float)step_count;
+    if (ds <= 0.0f) { out[py*res_img + px] = 0.0f; return; }
+
+    int r2 = res * res;
+    float C = 0.0f, T = 1.0f;
+    for (int i = 0; i < step_count; i++) {
+        float t = tstart + ((float)i + 0.5f) * ds;
+        float u = ox + t*dx + hf; u -= floor(u);
+        float v = oy + t*dy + hf; v -= floor(v);
+        float w = oz + t*dz + hf; w -= floor(w);
+        float fxn = u*(float)res, fyn = v*(float)res, fzn = w*(float)res;
+        int x0 = (int)fxn, y0 = (int)fyn, z0 = (int)fzn;
+        float rx = fxn - (float)x0, ry = fyn - (float)y0, rz = fzn - (float)z0;
+        int x1 = x0+1, y1 = y0+1, z1 = z0+1;
+        x0 %= res; x1 %= res; y0 %= res; y1 %= res; z0 %= res; z1 %= res;
+        int zb0 = z0*r2, zb1 = z1*r2;
+        int r00 = zb0 + y0*res, r10 = zb0 + y1*res;
+        int r01 = zb1 + y0*res, r11 = zb1 + y1*res;
+        float c00 = vol[r00+x0] + (vol[r00+x1]-vol[r00+x0])*rx;
+        float c10 = vol[r10+x0] + (vol[r10+x1]-vol[r10+x0])*rx;
+        float c01 = vol[r01+x0] + (vol[r01+x1]-vol[r01+x0])*rx;
+        float c11 = vol[r11+x0] + (vol[r11+x1]-vol[r11+x0])*rx;
+        float a0 = c00 + (c10-c00)*ry;
+        float a1 = c01 + (c11-c01)*ry;
+        float dens = a0 + (a1-a0)*rz;
+        float alpha = clamp(dens*density_scale*ds, 0.0f, 1.0f);
+        if (alpha > 0.0f) {
+            C += T*alpha*dens;
+            T *= (1.0f - alpha);
+            if (T < 0.02f) break;
+        }
+    }
+    out[py*res_img + px] = clamp(C, 0.0f, 1.0f);
 }
 """
 
@@ -723,3 +839,76 @@ def _generate_volume_cpu(size, octaves, base_freq, lacunarity, seed, noise_type,
     from generate_volumetric import _generate_volume
     return _generate_volume(size, octaves, base_freq, lacunarity, seed,
                             noise_type, cancel_event, voronoi_mode, progress_cb)
+
+
+# ---------------------------------------------------------------------------
+# 3D preview ray-march (GPU, optional; preview-only, not bit-exact)
+# ---------------------------------------------------------------------------
+
+def render_volume_3d_gpu(flat, res, yaw: float = 30.0, pitch: float = 20.0,
+                         density: float = 2.0, step_count: int = 64,
+                         image_size: int = 128, cancel_event=None,
+                         progress_cb=None):
+    """Ray-march a flat volume to an image_size^2 0-255 grayscale grid using
+    OpenCL, falling back to the CPU ray-marcher when OpenCL is unavailable or
+    fails. Returns None if cancel_event is set. Preview output is NOT required
+    to match the CPU/PNG path bit-exactly (that guarantee is generation-only).
+    """
+    if not OPENCL_AVAILABLE or not _get_mgr().is_ready():
+        from generate_volumetric import render_volume_3d
+        return render_volume_3d(flat, res, yaw, pitch, density, step_count,
+                                image_size, cancel_event)
+    try:
+        return _raymarch_opencl(flat, res, yaw, pitch, density, step_count,
+                                image_size, cancel_event, progress_cb)
+    except Exception:
+        from generate_volumetric import render_volume_3d
+        return render_volume_3d(flat, res, yaw, pitch, density, step_count,
+                                image_size, cancel_event)
+
+
+def _raymarch_opencl(flat, res, yaw, pitch, density, step_count, image_size,
+                     cancel_event=None, progress_cb=None):
+    """Run a single ray-march pass on the GPU (one 2D launch over pixels)."""
+    import numpy as np
+    import math
+
+    if cancel_event is not None and cancel_event.is_set():
+        return None
+
+    mgr = _get_mgr()
+    queue = mgr.queue
+
+    kernel = mgr.get_kernel("raymarch", "raymarch", _KERNEL_RAYMARCH)
+    if kernel is None:
+        raise RuntimeError("Failed to compile ray-march OpenCL kernel")
+
+    vol_np = np.asarray(flat, dtype=np.float32)
+    vol_buf = cl.Buffer(mgr.ctx, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=vol_np)
+    out_np = np.zeros(image_size * image_size, dtype=np.float32)
+    out_buf = cl.Buffer(mgr.ctx, cl.mem_flags.WRITE_ONLY, out_np.nbytes)
+
+    cy = np.float32(math.cos(math.radians(yaw))); sy = np.float32(math.sin(math.radians(yaw)))
+    cp = np.float32(math.cos(math.radians(pitch))); sp = np.float32(math.sin(math.radians(pitch)))
+
+    try:
+        kernel.set_args(
+            np.int32(res), np.int32(image_size), np.int32(step_count),
+            np.float32(density), cy, sy, cp, sp,
+            vol_buf, out_buf,
+        )
+        cl.enqueue_nd_range_kernel(queue, kernel, [image_size, image_size], None)
+        queue.finish()
+        cl.enqueue_read_buffer(queue, out_buf, out_np).wait()
+    finally:
+        vol_buf.release()
+        out_buf.release()
+
+    if cancel_event is not None and cancel_event.is_set():
+        return None
+    if progress_cb:
+        progress_cb(1.0)
+
+    grid = [[int(round(float(out_np[py * image_size + px]) * 255.0))
+             for px in range(image_size)] for py in range(image_size)]
+    return grid

@@ -10,6 +10,11 @@ PARAMS = [
     dict(size=32, octaves=3, base_freq=0.5, lacunarity=1.5, seed=123),
     dict(size=8, octaves=5, base_freq=0.02, lacunarity=3.0, seed=999),
     dict(size=16, octaves=5, base_freq=1.0, lacunarity=2.0, seed=5),
+    # Cellular tiling regressions: periods 5/9 only occur when the octave
+    # period is not a power of two (the case that used to alias features).
+    dict(size=64, octaves=4, base_freq=0.078125, lacunarity=2.0, seed=1926328),
+    dict(size=32, octaves=4, base_freq=0.140625, lacunarity=1.5, seed=1926328),
+    dict(size=16, octaves=2, base_freq=0.078125, lacunarity=0.5, seed=1926328),
 ]
 NOISE = [("Value Noise", ["F1"]), ("Worley Noise", ["F1"]),
          ("FBM Perlin Noise", ["F1"]),

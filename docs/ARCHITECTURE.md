@@ -24,9 +24,25 @@ write_png()                     ← Minimal PNG writer (zlib + struct)
 
 Both `_generate_volume()` and `generate_volume_gpu()` accept `cancel_event` (checked between rows / Z-slices) and `progress_cb(fraction)` (invoked once per completed Z-slice).
 
+The GUI **3D preview** is a separate read-only path that never touches the PNG or the noise samplers:
+
+```
+_cached_volume (floats [z][y][x], 0-1)
+    │
+    ▼
+volume_to_flat()                ← Flatten + downsample to <= MAX_RENDER_RES (128)
+    │
+    ▼
+render_volume_3d()              ← CPU orthographic ray-march (progressive passes)
+   or render_volume_3d_gpu()    ← OpenCL ray-march kernel (float; CPU fallback)
+    │
+    ▼
+grayscale grid -> upscale_grid -> PhotoImage blit (invert applied at blit)
+```
+
 ## Module Structure
 
-### `generate_volumetric.py` (~700 lines)
+### `generate_volumetric.py` (~830 lines)
 
 The main module containing all generation logic and the CLI entry point.
 
@@ -40,16 +56,19 @@ The main module containing all generation logic and the CLI entry point.
 7. **Volume Generation** — FBM loop with table pre-computation, `cancel_event`, `progress_cb`
 8. **Grid Layout** — Dimension calculation and slice arrangement
 9. **Upscaling** — Neighbor-free pixel scaling for preview
-10. **CLI Entry Point** — argparse with validation (`--size` ≥ 1, `--octaves` ≥ 1, non-power-of-two output note)
+10. **3D Preview Ray-March** — `volume_to_flat()` (flatten + downsample to ≤ `MAX_RENDER_RES`) and `render_volume_3d()` (orthographic front-to-back march, trilinear wrapped sampling, greyscale emission over black; `cancel_event` between rows). Rendering reads an existing volume; it never modifies the noise path
+11. **CLI Entry Point** — argparse with validation (`--size` ≥ 1, `--octaves` ≥ 1, non-power-of-two output note)
 
-### `generate_volumetric_gui.py` (~630 lines)
+### `generate_volumetric_gui.py` (~890 lines)
 
 A **thin wrapper** around `generate_volumetric.py`. Contains zero noise algorithms or generation logic — all of that is imported from the CLI module (the GPU module is imported optionally). The GUI adds only:
 - Tkinter controls (dropdowns, sliders, entries, buttons, preset save/load)
 - Threading with cancel support via `threading.Event`
-- Live preview rendering (full-volume slice slider), preview caching, completion dialogs
-- Progress bar driven by the generator's `progress_cb`
-- Optional OpenCL GPU acceleration toggle
+- Live preview rendering: **2D** full-volume slice slider, and a **3D** ray-marched cube (View toggle) with Yaw/Pitch/Density/Steps controls
+- Preview caching: quantized slices + upscaled grids (2D); downsampled flat volume + FIFO-capped rendered 3D frames + 3D display upscale (3D)
+- 3D single-slot progressive worker (coarse→fine passes), superseded on each parameter change; cancel between rows (CPU) / passes (GPU)
+- Progress bar driven by the generator's `progress_cb` (volume) and by pass completion (3D)
+- Optional OpenCL GPU acceleration toggle (generation and 3D ray-march)
 - X11-only font setup (`_configure_fonts`: forces the `fixed` generic family on X11/XWayland where Tk 9's default match renders aliased; Windows/macOS untouched)
 
 **Key mechanisms:**
@@ -66,6 +85,7 @@ Optional GPU acceleration via OpenCL. Produces **bit-exact** results identical t
 - `generate_value`, `generate_worley`, `generate_perlin`, `generate_voronoi` (5 modes via int parameter)
 - Written in IEEE double precision; `volatile` stores block FMA contraction (GPU FMA would otherwise diverge from Python's separate mul+add floats)
 - `sqrt`/double math only (driver-safe); no `sqrtf`/`fabsf`
+- `raymarch` (3D preview): a separate **float** kernel, one 2D launch over pixels per progressive pass, `cancel_event` checked between passes. Preview-only and **not** required to be bit-exact — the four generation kernels still enforce PNG bit-exactness. `render_volume_3d_gpu()` falls back to the CPU march when OpenCL is unavailable or the kernel fails. (`half` is a reserved OpenCL type — the cube half-extent is named `hf` in this kernel.)
 
 **Data layout:**
 - Per-octave tables pre-computed with `_precompute_*_table()` in `(tx, ty, tz)` component-array form (needed for GPU buffers), then merged by `_merge_octave_tables()` into single contiguous `cl.Buffer`s
@@ -87,7 +107,7 @@ Optional GPU acceleration via OpenCL. Produces **bit-exact** results identical t
 
 - `run.sh` — Linux/macOS launcher: picks a Python ≥ 3.10 (with tkinter for GUI), apt/brew tkinter install, optional `--gpu` pyopencl+numpy install with `.venv` fallback; portable across bash 3.2 (macOS) and bash 4/5
 - `run.cmd` → `run.ps1` — Windows equivalent (uses the `py` launcher then `python`)
-- `tests/run_all.sh` — verification suite: CLI smokes + validation, `tests/gpu_equiv.py` (40 fallback + 32 GPU bit-exact cases with the fallback sabotaged to prove kernel execution), `tests/gui_smoke.py` (14-check GUI state machine)
+- `tests/run_all.sh` — verification suite: CLI smokes + validation, `tests/cellular_check.py` (cellular field continuity across cell boundaries + seamless wrap for every Voronoi mode, over periods 2–16), `tests/gpu_equiv.py` (64 fallback + 56 GPU bit-exact cases with the fallback sabotaged to prove kernel execution), `tests/gui_smoke.py` (21-check GUI state machine: 15 generation/2D — including that the preview honours the selected Voronoi mode — + 6 3D-preview checks: frame produced, cancel mid-render, control-change re-render, cache bounds)
 - `SimpleVolumetric.unitypackage` — URP Shader Graph (`SimpleVolumetric.shadergraph` + `raymarchloop.shadersubgraph`) for raymarching the generated volumes in Unity
 
 ## Key Constants
@@ -95,11 +115,17 @@ Optional GPU acceleration via OpenCL. Produces **bit-exact** results identical t
 | Constant | Value | Module | Description |
 |----------|-------|--------|-------------|
 | `MAX_TABLE_PERIOD` | 128 | `generate_volumetric.py` | Max pre-computed table dimension (period > 128 → direct sampling on CPU; whole generation routes to CPU on the GPU path) |
+| `CELLULAR_SCALE` / `CELLULAR_SCALE2` | 2/√3, 1/√3 | `generate_volumetric.py` | Cellular distance normalisers (reciprocal of the half cell diagonal). Exact hex-float literals so the OpenCL kernels stay bit-exact |
 | `VALID_SIZES` | `[4, 16, 64, 256]` | `generate_volumetric_gui.py` | GUI dropdown options (power-of-two output guarantee) |
 | `NOISE_TYPES` | 4 types | `generate_volumetric_gui.py` | GUI noise type options |
 | `VORONOI_MODES` | 5 modes | `generate_volumetric.py` | Voronoi output mode options |
 | `MIN_BASE_FREQ` / `MAX_BASE_FREQ` | 0.001 / 2.0 | `generate_volumetric_gui.py` | Base Freq slider bounds; typed values clamped on focus-out |
-| `MAX_UPSCALE_CACHE` | 12 | `generate_volumetric_gui.py` | FIFO cap on cached upscaled preview grids |
+| `MAX_UPSCALE_CACHE` | 12 | `generate_volumetric_gui.py` | FIFO cap on cached upscaled preview grids (2D and 3D display) |
+| `MAX_RENDER_RES` | 128 | `generate_volumetric.py` | Max cube dimension for the 3D ray-march (256³ downsampled to 128³) |
+| `RENDER_IMAGE` | 128 | `generate_volumetric_gui.py` | Final ray-march buffer size (square); coarse passes are smaller |
+| `MAX_FRAME_CACHE` | 12 | `generate_volumetric_gui.py` | FIFO cap on cached rendered 3D frames |
+| `DENSITY_SCALE` | 20.0 | `generate_volumetric_gui.py` | Density slider (0–100) → opacity multiplier divisor |
+| `MIN_STEPS` / `MAX_STEPS` | 8 / 32 | `generate_volumetric_gui.py` | 3D Step Count slider bounds |
 | `OPENCL_AVAILABLE` | bool | `generate_volumetric_gpu.py` | Whether pyopencl + an OpenCL platform were detected |
 
 ## Data Flow
@@ -132,6 +158,18 @@ Each cell `C` (where `C = slice_index`) maps to:
 - Column: `C % cols`
 - Row: `C // cols`
 - Pixel value: `int(round(volume[C][y][x] * 255))`
+
+### 3D Preview Rendering (ray-march)
+
+The 3D view reads the cached volume without altering it:
+
+1. `volume_to_flat(volume)` — nearest-downsample to `res = min(L, MAX_RENDER_RES)` and flatten to `flat[z*res*res + y*res + x]` (built off the main thread during Preview).
+2. Per pixel of an `image_size×image_size` buffer, an orthographic ray is rotated by yaw (about Y) then pitch (about X), intersected with the unit cube `[-0.5, 0.5]³` (slab method), and marched in `step_count` samples.
+3. Each sample trilinearly reads density (seamlessly wrapped), and front-to-back compositing accumulates greyscale emission: `alpha = clamp(density*density_scale*ds)`, `C += T*alpha*d`, `T *= (1-alpha)`, early-out at `T < 0.02`.
+4. Output `clamp(C,0,1)*255` → grid; the GUI upscales it (integer scale) into the `PhotoImage`, applying Invert at blit time.
+5. Progressive passes render coarse→fine `(48, steps/4) → (96, steps/2) → (128, steps)`; each pass posts a frame. CPU checks `cancel_event` between rows; the GPU kernel launches once per pass and checks between passes.
+
+CPU and GPU share the same math (the GPU kernel mirrors the CPU march in `float`); they match closely but are not required to be bit-exact.
 
 ## Noise Table Pre-computation
 
