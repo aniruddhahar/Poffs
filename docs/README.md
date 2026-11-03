@@ -5,7 +5,7 @@
 A Python tool that generates L×L×L volumetric 3D textures and exports them as greyscale PNG grids. Each cell in the output image represents one Z-axis slice of a 3D noise volume.
 
 **Key characteristics:**
-- Zero external dependencies (Python standard library only); optional `pyopencl` for GPU acceleration
+- No third-party packages for core use: the CLI runs on the Python standard library alone; the GUI needs `tkinter` (a stdlib module that ships as a separate OS package on many Linux distributions); optional GPU acceleration uses `pyopencl` + `numpy`
 - Four noise algorithms: Value Noise, Worley (Cellular), FBM Perlin Noise, and Voronoi (5 output modes)
 - GPU acceleration via OpenCL (bit-exact identical output to CPU; auto-fallback if unavailable)
 - Seamless 3D tiling enabled by default (modulo-based wrapping)
@@ -16,9 +16,10 @@ A Python tool that generates L×L×L volumetric 3D textures and exports them as 
 
 ## Requirements
 
-- Python 3.10+ (uses `list[list[int]]` type hints)
+- Python 3.10+ (uses `list[list[int]] | None` type hints — the `X | None` unions require 3.10)
+- `tkinter` for the GUI — bundled with Windows/macOS python.org installers; on Linux it is usually a separate package (`python3-tk` on Debian/Ubuntu, `python3-tkinter` on Fedora, `tk` on Arch, `python-tk@3.x` via Homebrew). The launchers detect and try to install it.
 - Display server for GUI (X11/Wayland on Linux, native on Windows/macOS)
-- **Optional — GPU Acceleration:** `pip install pyopencl` and an OpenCL-compatible GPU (NVIDIA, AMD, or Intel)
+- **Optional — GPU Acceleration:** `pip install pyopencl numpy` and an OpenCL-compatible GPU (NVIDIA, AMD, or Intel)
 
 ## Quick Start
 

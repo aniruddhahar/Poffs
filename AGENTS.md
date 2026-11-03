@@ -1,7 +1,7 @@
 # Agent Instructions
 
 ## Project Overview
-Volumetric 3D texture generator. Produces greyscale PNGs containing a grid of Z-axis slices from a 3D noise volume. Zero external dependencies (Python stdlib only); optional `pyopencl` for GPU acceleration.
+Volumetric 3D texture generator. Produces greyscale PNGs containing a grid of Z-axis slices from a 3D noise volume. The CLI runs on the Python stdlib alone; the GUI additionally needs `tkinter` (stdlib module, but a separate OS package on many Linux distributions); optional `pyopencl` + `numpy` for GPU acceleration.
 
 ## Entry Points
 - **Launcher (Linux/macOS):** `./run.sh` (checks/installs deps: picks a Python ≥3.10 with tkinter for GUI, `--gpu` adds pyopencl+numpy; portable across bash 3.2/macOS and bash 4/5)
@@ -50,7 +50,7 @@ python generate_volumetric_gui.py
 The CLI rejects `--size` < 1 and `--octaves` < 1 (argparse errors). For L outside {4, 16, 64, 256} it prints a note when output dimensions are not powers of two.
 
 ## GPU Acceleration
-Install `pyopencl` (`pip install pyopencl`) to enable optional GPU-accelerated generation. The GUI shows a "Use OpenCL (GPU)" checkbox when available. Output is bit-exact identical to CPU (kernels use IEEE double + `volatile` guards to block FMA contraction; 8-bit quantization matches). Falls back to CPU automatically if OpenCL is unavailable or fails, any octave's table period exceeds 128, or the seed is outside 0–2³¹−1. GPU launches run one Z-slice at a time so cancel/progress work.
+Install `pyopencl` and `numpy` (`pip install pyopencl numpy`) to enable optional GPU-accelerated generation. When `pyopencl` is importable the GUI shows a "Use OpenCL (GPU)" checkbox (ticked by default); if no usable OpenCL platform/device is found at generation time, generation falls back to CPU automatically. Output is bit-exact identical to CPU (kernels use IEEE double + `volatile` guards to block FMA contraction; 8-bit quantization matches). Falls back to CPU automatically if OpenCL is unavailable or fails, any octave's table period exceeds 128, or the seed is outside 0–2³¹−1. GPU launches run one Z-slice at a time so cancel/progress work.
 
 ## GUI Features
 - **Noise Types:** Value Noise, Worley Noise (cellular), FBM Perlin Noise, Voronoi Noise (5 output modes)
@@ -94,14 +94,14 @@ Gradient-based noise: deterministic gradient vectors are generated per grid poin
 Same feature-point search as Worley noise, but with 5 distinct output modes computed from the nearest (F1) and second-nearest (F2) feature distances:
 - **F1:** Distance to nearest feature point (identical to Worley noise output)
 - **F2:** Distance to second nearest feature point
-- **F1 - F2:** Difference between first and second nearest — highlights cell boundaries as thin lines
+- **F1 - F2:** Difference between first and second nearest — cell boundaries appear as thin dark lines (interiors bright)
 - **Jitter:** Distance from query point to the feature point of the cell containing the query point (nearest periodic image, normalized)
-- **Edge:** Normalized edge detection: F1 / (F1 + F2), clamped to [0, 1]
+- **Edge:** Normalized edge detection: `F1 / (F1 + F2) × 2`, clamped to [0, 1]
 
 ## Constraints
 - Smoke/verification suite in `tests/run_all.sh` (no test framework, no linting, no type checking)
-- Python 3.10+ (uses `list[list[int]]` type hints)
+- Python 3.10+ (return annotations use `list[list[int]] | None`; the `X | None` union syntax requires 3.10)
 - GUI requires display server (won't work in headless environments)
 - Large sizes (256³) may be slow and consume significant memory
 - `volumetric_texture.png` is the tracked README sample: the GUI/CLI defaults write to it when run from the repo root — generate with `-o <other path>` to avoid churn; restore with `git checkout -- volumetric_texture.png`
-- GPU backend requires `pyopencl` and an OpenCL-compatible GPU (NVIDIA, AMD, or Intel)
+- GPU backend requires `pyopencl` + `numpy` and an OpenCL-compatible GPU (NVIDIA, AMD, or Intel)

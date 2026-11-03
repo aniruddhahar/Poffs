@@ -8,9 +8,9 @@ A tool for generating volumetric 3D textures as greyscale PNG image grids. Each 
 
 ## Features
 
-- **Zero dependencies** — Python standard library only (3.10+); optional `pyopencl` for GPU acceleration
+- **No third-party packages for core use** — the CLI runs on the Python standard library alone (3.10+); the GUI additionally needs `tkinter` (part of stdlib, but shipped as a separate OS package on some Linux distributions); optional GPU acceleration uses `pyopencl` + `numpy`
 - **Four noise algorithms** — Value Noise, Worley (Cellular), FBM Perlin Noise, and Voronoi (5 output modes)
-- **GPU acceleration** — Optional OpenCL backend with 100% identical output (install `pyopencl` to enable)
+- **GPU acceleration** — Optional OpenCL backend with 100% identical output (install `pyopencl` + `numpy` to enable)
 - **Command-line interface** — Batch generation and scripting support
 - **Interactive GUI** — Live 2D slice preview and a ray-marched 3D volume view, multiple noise types, parameter controls, and OpenCL toggle
 - **Seamless tiling** — Generate wrap-around 3D textures with no edge seams
@@ -28,22 +28,23 @@ A tool for generating volumetric 3D textures as greyscale PNG image grids. Each 
 | **Value Noise** | Smooth interpolation of random values at grid points. Fast and simple. |
 | **Worley Noise** | Cellular noise based on distance to nearest feature point. Produces organic, cell-like patterns. |
 | **FBM Perlin Noise** | Fractal Brownian Motion with gradient-based Perlin noise. Rich, natural-looking detail across multiple octaves. |
-| **Voronoi Noise** | Cellular noise with 5 output modes: `F1` (nearest distance), `F2` (second nearest), `F1 - F2` (edge highlight), `Jitter` (feature distance), `Edge` (normalized edge detection) |
+| **Voronoi Noise** | Cellular noise with 5 output modes: `F1` (nearest distance), `F2` (second nearest), `F1 - F2` (thin cell-boundary lines), `Jitter` (distance to own cell's feature point), `Edge` (normalized edge detection) |
 
 ## Installation
 
-No installation required. The tool uses only the Python standard library.
+There is no build/install step. The CLI runs on a stock Python 3.10+ interpreter with no third-party packages.
 
 **Requirements:**
 - Python 3.10 or later
+- `tkinter` for the GUI — bundled with the Windows/macOS python.org installers (the optional "tcl/tk and IDLE" feature), but on many Linux distributions it is a separate system package: `sudo apt install python3-tk` (Debian/Ubuntu), `sudo dnf install python3-tkinter` (Fedora), `sudo pacman -S tk` (Arch), or `brew install python-tk@3.x` (macOS Homebrew Python). The launchers check for it and attempt to install it automatically.
 - A display server for the GUI (X11/Wayland on Linux, Windows, macOS)
 
 **Optional — GPU Acceleration:**
-- Install `pyopencl` for OpenCL GPU support: `pip install pyopencl`
+- Install `pyopencl` and `numpy` for OpenCL GPU support: `pip install pyopencl numpy`
 - Requires an OpenCL-compatible GPU (NVIDIA, AMD, or Intel)
-- When available, the GUI shows a "Use OpenCL (GPU)" checkbox
+- When `pyopencl` is importable, the GUI shows a "Use OpenCL (GPU)" checkbox
 
-When OpenCL is not installed, all generation runs on CPU automatically.
+When OpenCL is not installed — or when it is installed but no OpenCL platform/device can be used — all generation runs on CPU automatically.
 
 ## Running
 
@@ -100,7 +101,7 @@ python generate_volumetric_gui.py
 | **Seed** | Random seed for reproducible results. Use the **Randomize** button for a new random seed. |
 | **Octaves** | Number of FBM octaves (detail levels). |
 | **Lacunarity** | Frequency multiplier between octaves (0–10, integer steps). Default: 2.0. |
-| **Use OpenCL (GPU)** | When `pyopencl` is installed and an OpenCL GPU is available, enable GPU-accelerated generation. Requires a restart of the generation to take effect. |
+| **Use OpenCL (GPU)** | Shown (ticked by default) when `pyopencl` + `numpy` are importable; enables GPU-accelerated generation. If no OpenCL platform/device is usable at generation time, it falls back to CPU automatically. Requires starting a new Preview/Render to take effect. |
 | **Invert Output** | Inverts pixel values (255 − value). Applies to the rendered PNG and the 2D preview (next generation); in the 3D view it re-composites the current frame instantly. |
 | **Output** | File path for the saved PNG. Use **Browse...** to pick a location. |
 | **Save Preset / Load Preset** | Save or restore all generation parameters as a simple JSON preset file. Loaded values are validated (invalid values rejected, out-of-range frequencies clamped). |
@@ -135,7 +136,7 @@ This repo ships **`SimpleVolumetric.unitypackage`** — a ready-made URP Shader 
 - `Assets/Shaders/SimpleVolumetric.shadergraph` — URP shader with a `RaymarchLoop` custom function
 - `Assets/Shaders/raymarchloop.shadersubgraph` — the reusable raymarch loop sub-graph
 
-Exposed material properties: `Texture3D` (the volume), `Density`, `Step Count`, `Step Size`, `Main Scale`/`Main Wind`, `Detail Scale`/`Detail Wind`, `Time`, `Minimum`/`Maximum`.
+Exposed material properties: `Texture3D` (the volume), `Density`, `Steps`, `Step Size`, `Main Scale`/`Main Wind`, `Detail Scale`/`Detail Wind`, `Minimum`/`Maximum` (animation time comes from Shader Graph's built-in **Time** node, which is not an exposed material property).
 
 **Workflow (Unity 6+, URP):**
 

@@ -35,9 +35,9 @@ When Voronoi Noise is selected, a mode selector appears below the noise type dro
 |------|-------------|
 | **F1** | Distance to nearest feature point (identical to Worley Noise) |
 | **F2** | Distance to second nearest feature point |
-| **F1 - F2** | Difference between first and second nearest — highlights cell boundaries |
+| **F1 - F2** | Difference between first and second nearest — cell boundaries appear as thin dark lines |
 | **Jitter** | Distance from query point to the feature point of its containing cell |
-| **Edge** | Normalized edge detection: F1 / (F1 + F2) |
+| **Edge** | Normalized edge detection: `F1 / (F1 + F2) × 2` (clamped) |
 
 ### Base Frequency (Base Freq)
 
@@ -64,14 +64,14 @@ Higher values increase the frequency jump between octaves, producing coarser det
 
 ### Use OpenCL (GPU)
 
-When `pyopencl` is installed and an OpenCL-compatible GPU is available, a checkbox appears below Lacunarity; otherwise a gray "OpenCL: not available" label appears in its place.
+When `pyopencl` + `numpy` are importable, a checkbox appears below Lacunarity (ticked by default); otherwise a gray "OpenCL: not available" label appears in its place. The OpenCL platform/device is detected lazily at generation time, so the checkbox can be present on a machine without an OpenCL device — generation then falls back to CPU automatically.
 
 - **Enabled:** Uses `generate_volumetric_gpu.py` for GPU-accelerated generation
 - **Disabled:** Uses the CPU backend (`generate_volumetric.py`)
 - **Output is 100% identical** regardless of which backend is used
 - Requires starting a new Preview/Render after toggling (no live switch)
 
-**Installation:** `pip install pyopencl` (requires OpenCL runtime on the system)
+**Installation:** `pip install pyopencl numpy` (requires OpenCL runtime on the system for the device path)
 
 ### Invert Output
 
@@ -90,7 +90,7 @@ Switching to 3D re-renders automatically once a volume is cached. The 3D view ad
 | **Density** | 0–100 | Opacity multiplier (higher = more absorbing/brighter) |
 | **Steps** | 8–32 | Ray-march sample count per ray (quality vs speed) |
 
-Slider names mirror the Unity `SimpleVolumetric` reference (Density, Step Count) plus free yaw/pitch.
+Slider names mirror the Unity `SimpleVolumetric` material properties (Density, Steps) plus free yaw/pitch.
 
 ### 3D Render Model
 
@@ -181,4 +181,4 @@ The GPU backend (`generate_volumetric_gpu.py`) provides optional OpenCL-accelera
 **Performance:**
 - For small volumes (4³–64³), CPU and GPU have similar runtime (overhead dominates)
 - Larger volumes (>128³) benefit more from GPU acceleration
-- Requires `pip install pyopencl` and an OpenCL-compatible GPU
+- Requires `pip install pyopencl numpy` and an OpenCL-compatible GPU

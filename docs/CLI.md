@@ -39,9 +39,9 @@ python3 generate_volumetric.py [OPTIONS]
 |------|-------------|---------------|
 | `F1` | Distance to nearest feature point | Identical to Worley noise — organic cell patterns |
 | `F2` | Distance to second nearest feature point | Broader cell-like regions, different topology |
-| `F1 - F2` | Difference between first and second nearest | Thin lines along cell boundaries |
-| `Jitter` | Distance from query point to the feature point of its containing cell | Grid-aligned cell gradients with bright falloff from each cell center |
-| `Edge` | Normalized edge detection: F1 / (F1 + F2) | Clean cell boundary outlines |
+| `F1 - F2` | Difference between first and second nearest | Thin dark lines along cell boundaries (cell interiors bright) |
+| `Jitter` | Distance from query point to the feature point of its containing cell | Grid-aligned cells, dark at each cell's feature point and brightening toward cell edges/corners |
+| `Edge` | Normalized edge detection: `F1 / (F1 + F2) × 2` (clamped) | Clean bright cell-boundary outlines over dark cell interiors |
 
 ## Usage Examples
 

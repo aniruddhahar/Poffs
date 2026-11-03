@@ -126,7 +126,7 @@ Optional GPU acceleration via OpenCL. Produces **bit-exact** results identical t
 | `MAX_FRAME_CACHE` | 12 | `generate_volumetric_gui.py` | FIFO cap on cached rendered 3D frames |
 | `DENSITY_SCALE` | 20.0 | `generate_volumetric_gui.py` | Density slider (0–100) → opacity multiplier divisor |
 | `MIN_STEPS` / `MAX_STEPS` | 8 / 32 | `generate_volumetric_gui.py` | 3D Step Count slider bounds |
-| `OPENCL_AVAILABLE` | bool | `generate_volumetric_gpu.py` | Whether pyopencl + an OpenCL platform were detected |
+| `OPENCL_AVAILABLE` | bool | `generate_volumetric_gpu.py` | Whether `import pyopencl` + `numpy` succeeded (set at import). The OpenCL platform/device is probed lazily by `_OpenCLManager.is_ready()`, which is what actually gates the GPU paths — without one, generation and ray-march fall back to CPU |
 
 ## Data Flow
 
@@ -165,9 +165,9 @@ The 3D view reads the cached volume without altering it:
 
 1. `volume_to_flat(volume)` — nearest-downsample to `res = min(L, MAX_RENDER_RES)` and flatten to `flat[z*res*res + y*res + x]` (built off the main thread during Preview).
 2. Per pixel of an `image_size×image_size` buffer, an orthographic ray is rotated by yaw (about Y) then pitch (about X), intersected with the unit cube `[-0.5, 0.5]³` (slab method), and marched in `step_count` samples.
-3. Each sample trilinearly reads density (seamlessly wrapped), and front-to-back compositing accumulates greyscale emission: `alpha = clamp(density*density_scale*ds)`, `C += T*alpha*d`, `T *= (1-alpha)`, early-out at `T < 0.02`.
+3. Each sample trilinearly reads density `dens` (seamlessly wrapped), and front-to-back compositing accumulates greyscale emission (`density` here is the opacity multiplier = Density slider ÷ `DENSITY_SCALE`): `alpha = clamp(dens * density * ds)`, `C += T*alpha*dens`, `T *= (1-alpha)`, early-out at `T < 0.02`.
 4. Output `clamp(C,0,1)*255` → grid; the GUI upscales it (integer scale) into the `PhotoImage`, applying Invert at blit time.
-5. Progressive passes render coarse→fine `(48, steps/4) → (96, steps/2) → (128, steps)`; each pass posts a frame. CPU checks `cancel_event` between rows; the GPU kernel launches once per pass and checks between passes.
+5. Progressive passes render coarse→fine `(48, max(8, steps//4)) → (96, max(12, steps//2)) → (128, steps)`; each pass posts a frame. CPU checks `cancel_event` between rows; the GPU kernel launches once per pass and checks between passes.
 
 CPU and GPU share the same math (the GPU kernel mirrors the CPU march in `float`); they match closely but are not required to be bit-exact.
 

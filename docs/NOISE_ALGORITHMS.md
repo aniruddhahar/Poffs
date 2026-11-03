@@ -21,12 +21,12 @@ Value noise is the simplest and fastest of the four algorithms. It places determ
 4. **Lerp chain:** The 8 corner values are interpolated along X (pairwise), then along Y, then along Z — a total of 3 lerp passes yielding the final value.
 
 ### Seaming
-Seamless 3D tiling is achieved by wrapping grid coordinates modulo the hash period. When the volume size is an exact multiple of the period, or when the period is set to match the volume, opposite edges produce identical values, making the texture tile perfectly in all three dimensions.
+Seamless 3D tiling is achieved by wrapping grid coordinates modulo the hash period. The sampling coordinates are scaled so the volume spans exactly `period` lattice cells, so opposite faces of the volume evaluate the same periodic lattice point and match exactly for any period.
 
 ### Performance
 - **Fastest algorithm** — no neighbor search, no gradient computation
 - Supports both direct per-voxel sampling and pre-computed 3D lookup tables
-- Table pre-computation stores `period³` hash values once, then uses table lookups during volume generation (128³ = ~2M entries, ~16 MB)
+- Table pre-computation stores `period³` hash values once, then uses table lookups during volume generation (128³ ≈ 2M entries; ≈16 MB as raw float64 payload, roughly twice that once Python's list/float object overhead is counted)
 - Direct sampling computes a hash per lattice corner on the fly (8 hashes per voxel)
 
 ### Characteristics
@@ -64,7 +64,7 @@ Seamless wrapping needs both halves of the periodic wrap: modulo on the neighbou
 
 ### Performance
 - Slightly slower than value noise due to the neighborhood search (27 hash computations per voxel in direct mode)
-- Table-based mode stores `period³` feature points (triples), which is ~3× more memory than value noise tables
+- Table-based mode stores `period³` feature points (triples), which costs roughly twice the memory of value noise tables (measured; three floats per entry plus tuple overhead)
 - Direct mode is used when `hash_period > MAX_TABLE_PERIOD (128)`
 
 ### Characteristics
@@ -87,7 +87,7 @@ All in `generate_volumetric.py`:
 Perlin noise is a gradient-based noise algorithm developed by Ken Perlin. It produces the most natural-looking patterns — cloudy, wooden, or marbled — by combining deterministic gradient vectors with trilinear interpolation. When combined via FBM (Fractal Brownian Motion), it produces rich, multi-scale detail.
 
 ### How it works
-1. **Gradient vector generation:** For each integer grid point `(x, y, z)`, a deterministic hash produces a 3D gradient vector `(gx, gy, gz)` where each component is in `[-1, 1]`. The gradient is derived from three independent hash chains to ensure good directional distribution.
+1. **Gradient vector generation:** For each integer grid point `(x, y, z)`, a deterministic hash produces a 3D gradient vector `(gx, gy, gz)` where each component is in `[-1, 1]`. The gradient is built from three chained hash steps (gx seeds h1, h1 seeds h2 for gy, h2 seeds h3 for gz), giving each component its own bit-mixing pass.
 
 2. **Unit cube corner evaluation:** For a query point at `(sx, sy, sz)`, the algorithm identifies the 8 corners of the unit cube. At each corner, it computes the dot product between the corner's gradient vector and the offset vector from the corner to the query point. This dot product represents the "gradient influence" at that corner.
 
@@ -101,7 +101,7 @@ Same modulo-based wrapping as value noise. Grid coordinates are wrapped modulo t
 ### Performance
 - **Slowest algorithm** due to gradient vector computation and dot products at each of 8 corners
 - Each corner requires computing a dot product: `gx*dx + gy*dy + gz*dz` (3 multiplies + 2 adds)
-- Table-based mode stores `period³` gradient triples (~3× the memory of value noise tables)
+- Table-based mode stores `period³` gradient triples (~2× the memory of value noise tables, measured)
 - Pre-computation avoids re-hashing gradients, but the dot product chain per voxel is still heavier than value noise
 
 ### Characteristics
@@ -137,9 +137,9 @@ Voronoi noise is a cellular noise algorithm closely related to Worley noise. Ins
    |------|---------|-------------|
    | **F1** | `F1 × 2/√3` (clamped) | Distance to nearest feature point. Identical to Worley noise output. Produces organic cell patterns. |
    | **F2** | `F2 × 1/√3` (clamped) | Distance to second nearest feature point. Produces broader, more spread-out cell patterns with different topology than F1. |
-   | **F1 - F2** | `|F1 - F2| × 2/√3` (clamped) | Difference between nearest and second-nearest distances. Produces thin lines along cell boundaries where F1 and F2 are similar. The cell interiors appear dark (similar distances) while boundaries appear bright. |
-   | **Jitter** | `d_own × 2/√3` (clamped) | Distance from query point to the feature point of the cell containing it (not the nearest feature point). Produces grid-aligned cell gradients with bright falloff from each cell's own feature point. |
-   | **Edge** | `F1 / (F1 + F2) × 2` (clamped) | Normalized edge detection. Produces clean cell boundary outlines. When F1 ≈ F2 (on a boundary), the ratio ≈ 0.5, giving mid-grey edges. Deep inside a cell, F1 ≪ F2, giving dark values. |
+   | **F1 - F2** | `|F1 - F2| × 2/√3` (clamped) | Difference between nearest and second-nearest distances. On cell boundaries F1 ≈ F2, so the difference → 0 and boundaries appear as thin dark lines; inside a cell F2 grows well beyond F1, so cell interiors appear bright. |
+   | **Jitter** | `d_own × 2/√3` (clamped) | Distance from query point to the feature point of the cell containing it (not the nearest feature point). Each cell is darkest at its own (off-center) feature point and brightens with distance toward its edges/corners. |
+   | **Edge** | `F1 / (F1 + F2) × 2` (clamped) | Normalized edge detection. Produces clean cell boundary outlines. When F1 ≈ F2 (on a boundary), the ratio ≈ 0.5 and doubling maps it to ≈ 1.0, giving bright boundary lines; deep inside a cell, F1 ≪ F2, driving the value toward 0 (dark). |
 
 ### Seaming
 Identical periodic wrapping to Worley noise: neighbour cell indices are wrapped modulo the period, and each feature offset is taken to the nearest image of the tiling.
@@ -209,7 +209,7 @@ For each octave, the hash period is computed as:
 ```
 hash_period = max(2, round(size × base_freq × lacunarity^octave))
 ```
-When `hash_period` divides evenly into `size`, the tiling is mathematically exact. When it doesn't, the modulo wrapping still produces visually seamless results but with potential minor artifacts at very high frequencies.
+The coordinate mapping spans exactly one full lattice period across the L voxels of the volume, so the two opposite faces of the volume coincide with the same point of the periodic lattice and match **exactly** for any period (`tests/cellular_check.py` asserts a zero wrap mismatch for every Voronoi mode over periods {2, 3, 4, 5, 6, 9, 16}). When `hash_period` does not divide `size` evenly, the lattice spacing is simply a fractional number of voxels — the tiling stays seamless, only the per-voxel lattice alignment changes.
 
 ---
 
